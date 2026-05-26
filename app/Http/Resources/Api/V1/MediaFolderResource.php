@@ -16,7 +16,7 @@ class MediaFolderResource extends JsonResource
             'is_fallback'      => $this->is_fallback,
             'max_daily_tokens' => $this->max_daily_tokens,
             'assets_count'     => $this->whenCounted('assets'),
-            'tokens_spent_today' => $this->whenLoaded('assets', fn () => null, null),
+            'tokens_spent_today' => $this->resource->tokensSpentToday(),
             'created_at'       => $this->created_at?->toIso8601String(),
             'updated_at'       => $this->updated_at?->toIso8601String(),
         ];

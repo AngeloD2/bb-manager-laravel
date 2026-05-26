@@ -16,7 +16,9 @@ return new class extends Migration
             $table->unsignedInteger('max_daily_tokens')->nullable();    // folder-scoped daily cap
             $table->timestamps();
             $table->softDeletes();
+        });
 
+        Schema::table('media_folders', function (Blueprint $table) {
             $table->foreign('parent_folder_id')
                   ->references('id')
                   ->on('media_folders')

@@ -12,12 +12,8 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
-        // ── Admin User ────────────────────────────────────────────────────────
-        \App\Models\User::create([
-            'name'     => 'Admin User',
-            'email'    => 'admin@example.com',
-            'password' => \Illuminate\Support\Facades\Hash::make('password'),
-        ]);
+        // ── Default Users ─────────────────────────────────────────────────────
+        $this->call(UserSeeder::class);
 
         // ── Folders ───────────────────────────────────────────────────────────
 

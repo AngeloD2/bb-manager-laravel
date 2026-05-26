@@ -154,7 +154,7 @@ class AssetControllerTest extends TestCase
     {
         $adminUser = \App\Models\User::create([
             'name'     => 'Admin Test User',
-            'email'    => 'admin-test-' . uniqid() . '@example.com',
+            'username' => 'admin-test-' . uniqid(),
             'password' => \Illuminate\Support\Facades\Hash::make('password'),
         ]);
         $token = $adminUser->createToken('admin-token', ['admin'])->plainTextToken;

@@ -61,7 +61,12 @@ class FolderController extends Controller
 
     public function destroy(MediaFolder $folder): JsonResponse
     {
-        $folder->delete(); // soft delete; assets become folder_id = null via cascade
+        // Null-out child asset references before soft-deleting the folder.
+        // The FK nullOnDelete trigger only fires on hard DELETE, not soft deletes.
+        \App\Models\MediaAsset::where('folder_id', $folder->id)
+            ->update(['folder_id' => null]);
+
+        $folder->delete();
 
         return response()->json(['message' => 'Folder deleted.'], 200);
     }
