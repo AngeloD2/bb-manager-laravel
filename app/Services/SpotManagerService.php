@@ -10,14 +10,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * TokenManagerService
+ * SpotManagerService
  *
  * Processes bulk PlaybackLog submissions from billboard devices.
- * Validates each entry against the token budget, deducts tokens with
+ * Validates each entry against the spot budget, deducts spots with
  * a DB-level lock to handle concurrent billboard reporting safely,
  * and persists audit logs.
  */
-class TokenManagerService
+class SpotManagerService
 {
     public function __construct(
         private readonly ConstraintValidationService $constraintValidator
@@ -43,7 +43,7 @@ class TokenManagerService
             } catch (\Throwable $e) {
                 $rejected++;
                 $errors[] = "asset_id={$entry['asset_id']}: {$e->getMessage()}";
-                Log::warning('TokenManagerService: entry rejected', [
+                Log::warning('SpotManagerService: entry rejected', [
                     'device_id' => $device->id,
                     'entry'     => $entry,
                     'error'     => $e->getMessage(),
@@ -77,14 +77,14 @@ class TokenManagerService
                     return false;
                 }
 
-                $asset->deductToken();
+                $asset->deductSpot();
             }
 
             PlaybackLog::create([
                 'asset_id'    => $asset->id,
-                'folder_id'   => $asset->folder_id,
+                'loop_id'     => $asset->loop_id,
                 'device_id'   => $device->id,
-                'token_spent' => 1,
+                'spot_spent'  => 1,
                 'was_override' => $entry['was_override'] ?? false,
                 'played_at'   => $entry['played_at'],
             ]);

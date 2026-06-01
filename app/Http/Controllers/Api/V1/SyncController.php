@@ -4,9 +4,9 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\MediaAssetResource;
-use App\Http\Resources\Api\V1\MediaFolderResource;
+use App\Http\Resources\Api\V1\MediaLoopResource;
 use App\Services\DeviceSyncService;
-use App\Services\TokenManagerService;
+use App\Services\SpotManagerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -15,21 +15,21 @@ use Illuminate\Support\Facades\Validator;
  * SyncController
  *
  * Handles the billboard device ↔ server communication:
- *  GET  /api/v1/sync   — pull current state (folders, eligible assets, overrides)
- *  POST /api/v1/logs   — push bulk playback logs for token deduction
+ *  GET  /api/v1/sync   — pull current state (loops, eligible assets, overrides)
+ *  POST /api/v1/logs   — push bulk playback logs for spot deduction
  */
 class SyncController extends Controller
 {
     public function __construct(
         private readonly DeviceSyncService   $syncService,
-        private readonly TokenManagerService $tokenManager
+        private readonly SpotManagerService $tokenManager
     ) {}
 
     /**
      * GET /api/v1/sync
      *
      * Returns the full device payload:
-     *  - All folders
+     *  - All loops
      *  - Eligible (constraint-passing) primary assets with delivery URLs
      *  - Fallback assets
      *  - Pending override commands (consumed on delivery)
@@ -47,13 +47,14 @@ class SyncController extends Controller
                     'name'     => $device->name,
                     'geo_zone' => $device->geo_zone,
                 ],
-                'folders'           => MediaFolderResource::collection($payload['folders']),
+                'loops'           => MediaLoopResource::collection($payload['loops']),
                 'eligible_assets'   => MediaAssetResource::collection($payload['eligible_assets']),
                 'fallback_assets'   => MediaAssetResource::collection($payload['fallback_assets']),
                 'pending_overrides' => $payload['pending_overrides']->map(fn ($o) => [
                     'id'       => $o->id,
                     'asset'    => new MediaAssetResource($o->asset),
                 ]),
+                'broadcasting'    => $payload['broadcasting'],
                 'synced_at' => $payload['synced_at'],
             ],
         ]);
@@ -63,7 +64,7 @@ class SyncController extends Controller
      * POST /api/v1/logs
      *
      * Accepts a batch of playback log entries from a billboard device.
-     * Validates token budgets and persists the accepted entries.
+     * Validates spot budgets and persists the accepted entries.
      *
      * Body: { "logs": [{ "asset_id": "...", "played_at": "ISO8601", "was_override": false }] }
      */
@@ -92,6 +93,96 @@ class SyncController extends Controller
     }
 
     /**
+     * POST /api/v1/playback/start
+     *
+     * Invoked by a billboard device to notify that it has started playing a media asset.
+     * Broadcasts the event to all listeners of the device's WebSocket channel.
+     */
+    public function reportPlaybackStart(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'asset_id'   => ['required', 'uuid', 'exists:media_assets,id'],
+            'started_at' => ['required', 'date'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        /** @var \App\Models\Device $device */
+        $device = $request->user();
+        $asset  = \App\Models\MediaAsset::findOrFail($request->input('asset_id'));
+
+        // Broadcast via Reverb/Pusher if configured
+        try {
+            broadcast(new \App\Events\PlaybackStarted($device, $asset, $request->input('started_at')));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Broadcast failed: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'message' => "Playback event broadcasted.",
+            'data'    => [
+                'device_id' => $device->id,
+                'asset_id'  => $asset->id,
+                'started_at'=> $request->input('started_at'),
+            ],
+        ], 200);
+    }
+
+    /**
+     * GET /api/v1/assets/{assetId}/serve
+     *
+     * Sanctum-authenticated auth gate: validates device access then issues a
+     * 302 redirect to a short-lived presigned S3 URL. S3 delivers the bytes
+     * directly to the device; this route only pays the cost of a HeadObject
+     * check and redirect. The bucket must have a CORS policy allowing GET from
+     * all origins so that the browser accepts the S3 response after following
+     * the redirect.
+     */
+    public function serveAsset(Request $request, string $assetId): \Illuminate\Http\RedirectResponse|JsonResponse
+    {
+        /** @var \App\Models\Device $device */
+        $device = $request->user();
+
+        $asset = \App\Models\MediaAsset::with('loop')->find($assetId);
+
+        if (!$asset) {
+            return response()->json(['message' => 'Asset not found.'], 404);
+        }
+
+        if (!$this->deviceCanAccessAsset($device, $asset)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $disk = \Illuminate\Support\Facades\Storage::disk('s3');
+
+        if (!$disk->exists($asset->file_path)) {
+            return response()->json(['message' => 'Asset file missing from storage.'], 404);
+        }
+
+        $presignedUrl = $disk->temporaryUrl($asset->file_path, now()->addSeconds(300));
+
+        return redirect($presignedUrl, 302);
+    }
+
+    private function deviceCanAccessAsset(\App\Models\Device $device, \App\Models\MediaAsset $asset): bool
+    {
+        if ($asset->is_global) return true;
+
+        if (!empty($asset->assigned_devices) && in_array($device->id, $asset->assigned_devices)) {
+            return true;
+        }
+
+        $loop = $asset->loop;
+        if (!$loop) return false;
+
+        if ($loop->is_global) return true;
+
+        return !empty($loop->assigned_devices) && in_array($device->id, $loop->assigned_devices);
+    }
+
+    /**
      * GET /api/v1/assets/{asset}/download
      *
      * Returns a short-lived S3 presigned GET URL for local edge caching
@@ -109,4 +200,51 @@ class SyncController extends Controller
             ],
         ]);
     }
+
+    /**
+     * GET /api/v1/device/next
+     *
+     * Returns the single next media asset for the device to play.
+     */
+    public function nextAsset(Request $request, \App\Services\QueueGenerationService $queueService): JsonResponse
+    {
+        /** @var \App\Models\Device $device */
+        $device = $request->user();
+
+        if (!$device->is_online) {
+            return response()->json(['data' => null]);
+        }
+
+        $device->heartbeat();
+
+        $next = $queueService->popNextAsset($device);
+
+        if (!$next) {
+            return response()->json(['data' => null]);
+        }
+
+        // Add download URL
+        $asset = \App\Models\MediaAsset::find($next['asset_id']);
+        if ($asset) {
+            $next['download_url'] = route('sync.asset-serve', ['assetId' => $asset->id]);
+        }
+
+        return response()->json(['data' => $next]);
+    }
+
+    /**
+     * GET /api/v1/timeline
+     *
+     * Returns the generated timeline preview (for the admin dashboard app).
+     */
+    public function timeline(Request $request, \App\Services\QueueGenerationService $queueService): JsonResponse
+    {
+        $deviceId = $request->query('device_id');
+        $device = \App\Models\Device::findOrFail($deviceId);
+        
+        $queue = $queueService->getUpcomingQueue($device, 12);
+        
+        return response()->json(['data' => $queue]);
+    }
 }
+

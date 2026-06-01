@@ -12,9 +12,9 @@ class SecureShareLinkResource extends JsonResource
         return [
             'id'         => $this->id,
             'label'      => $this->label,
-            'folder_id'  => $this->folder_id,
+            'loop_id'  => $this->loop_id,
             'asset_id'   => $this->asset_id,
-            'share_url'  => $this->shareUrl(),
+            'token'      => $this->token,
             'expires_at' => $this->expires_at?->toIso8601String(),
             'is_one_time'=> $this->is_one_time,
             'is_expired' => $this->is_expired || $this->expires_at?->isPast(),

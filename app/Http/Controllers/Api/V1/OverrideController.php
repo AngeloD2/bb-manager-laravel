@@ -40,10 +40,13 @@ class OverrideController extends Controller
             'consumed'  => false,
         ]);
 
+        // Inject the override directly into the server's generated timeline queue
+        app(\App\Services\QueueGenerationService::class)->injectOverride($device, $asset);
+
         // Broadcast via Reverb if configured (non-blocking)
         if (config('broadcasting.default') === 'reverb') {
             try {
-                broadcast(new \App\Events\OverrideDispatched($override, $asset, $device));
+                broadcast(new \App\Events\DeviceCommand($device, 'override', ['asset_id' => $asset->id]));
             } catch (\Throwable) {
                 // WebSocket broadcast failed — polling fallback will handle it.
             }

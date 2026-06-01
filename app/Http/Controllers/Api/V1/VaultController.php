@@ -26,7 +26,7 @@ class VaultController extends Controller
 
     public function index(): JsonResponse
     {
-        $links = SecureShareLink::with(['folder', 'asset'])
+        $links = SecureShareLink::with(['loop', 'asset'])
             ->latest()
             ->get();
 
@@ -39,7 +39,7 @@ class VaultController extends Controller
     {
         $data = $request->validate([
             'label'       => ['required', 'string', 'max:200'],
-            'folder_id'   => ['nullable', 'uuid', 'exists:media_folders,id'],
+            'loop_id'   => ['nullable', 'uuid', 'exists:media_loops,id'],
             'asset_id'    => ['nullable', 'uuid', 'exists:media_assets,id'],
             'is_one_time' => ['boolean'],
             'ttl_hours'   => ['nullable', 'integer', 'min:1', 'max:720'],
@@ -51,7 +51,7 @@ class VaultController extends Controller
 
         $link = SecureShareLink::create([
             'label'         => $data['label'],
-            'folder_id'     => $data['folder_id'] ?? null,
+            'loop_id'     => $data['loop_id'] ?? null,
             'asset_id'      => $data['asset_id']  ?? null,
             'token'         => $token,
             'password_hash' => Hash::make($pin),
@@ -86,7 +86,7 @@ class VaultController extends Controller
      * POST /api/v1/vault/verify
      *
      * Public endpoint — no Sanctum auth required.
-     * Client (recipient) submits the share token + PIN.
+     * Client (recipient) submits the share spot + PIN.
      * Returns a short-lived S3 delivery URL if valid.
      */
     public function verify(Request $request): JsonResponse
@@ -130,8 +130,8 @@ class VaultController extends Controller
             ] : null;
         }
 
-        if ($link->folder_id) {
-            $assets = MediaAsset::where('folder_id', $link->folder_id)
+        if ($link->loop_id) {
+            $assets = MediaAsset::where('loop_id', $link->loop_id)
                 ->where('is_synced', true)
                 ->get()
                 ->map(fn ($a) => [

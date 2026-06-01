@@ -11,15 +11,15 @@ return new class extends Migration
         Schema::create('playback_logs', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->uuid('asset_id');
-            $table->uuid('folder_id')->nullable();
+            $table->uuid('loop_id')->nullable();
             $table->uuid('device_id');
-            $table->unsignedTinyInteger('token_spent')->default(1);
+            $table->unsignedTinyInteger('spot_spent')->default(1);
             $table->boolean('was_override')->default(false);
             $table->timestamp('played_at');
 
             // Indexes for the hot constraint-checking queries
             $table->index(['asset_id', 'played_at']);
-            $table->index(['folder_id', 'played_at']);
+            $table->index(['loop_id', 'played_at']);
             $table->index(['device_id', 'played_at']);
 
             $table->foreign('asset_id')->references('id')->on('media_assets')->cascadeOnDelete();

@@ -25,6 +25,18 @@ return [
 
     /*
     |----------------------------------------------------------------------
+    | Billboard canvas dimensions
+    |----------------------------------------------------------------------
+    | Target output resolution fed to the billboard (4K UHD, 16:9). When an
+    | asset is uploaded with the "stretch to fit" toggle enabled,
+    | AssetProcessingJob re-encodes the media to exactly these dimensions.
+    | Aspect ratio is NOT preserved — the source is stretched to fill it.
+    */
+    'billboard_width'  => (int) env('BILLBOARD_WIDTH', 3840),
+    'billboard_height' => (int) env('BILLBOARD_HEIGHT', 2160),
+
+    /*
+    |----------------------------------------------------------------------
     | S3 / CloudFront delivery
     |----------------------------------------------------------------------
     | cloudfront_url: if set, asset URLs are built from this CDN base

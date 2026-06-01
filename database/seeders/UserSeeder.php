@@ -13,37 +13,44 @@ class UserSeeder extends Seeder
      */
     public function run(): void
     {
-        $users = [
+        // Always create the admin account
+        User::firstOrCreate(
+            ['username' => 'admin'],
             [
                 'name' => 'Admin User',
-                'username' => 'admin',
                 'password' => Hash::make('password'),
-            ],
-            [
-                'name' => 'Manager User',
-                'username' => 'manager',
-                'password' => Hash::make('password'),
-            ],
-            [
-                'name' => 'Operator User',
-                'username' => 'operator',
-                'password' => Hash::make('password'),
-            ],
-            [
-                'name' => 'Demo User',
-                'username' => 'demo',
-                'password' => Hash::make('password'),
-            ],
-        ];
+            ]
+        );
 
-        foreach ($users as $userData) {
-            User::firstOrCreate(
-                ['username' => $userData['username']],
+        // Development-only accounts — not seeded in production
+        if (app()->environment('local', 'testing')) {
+            $devUsers = [
                 [
-                    'name' => $userData['name'],
-                    'password' => $userData['password'],
-                ]
-            );
+                    'name' => 'Manager User',
+                    'username' => 'manager',
+                    'password' => Hash::make('password'),
+                ],
+                [
+                    'name' => 'Operator User',
+                    'username' => 'operator',
+                    'password' => Hash::make('password'),
+                ],
+                [
+                    'name' => 'Demo User',
+                    'username' => 'demo',
+                    'password' => Hash::make('password'),
+                ],
+            ];
+
+            foreach ($devUsers as $userData) {
+                User::firstOrCreate(
+                    ['username' => $userData['username']],
+                    [
+                        'name' => $userData['name'],
+                        'password' => $userData['password'],
+                    ]
+                );
+            }
         }
     }
 }

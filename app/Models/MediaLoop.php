@@ -8,64 +8,69 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-class MediaFolder extends Model
+class MediaLoop extends Model
 {
     use HasUuids, SoftDeletes;
 
-    protected $table = 'media_folders';
+    protected $table = 'media_loops';
 
     protected $fillable = [
         'name',
-        'parent_folder_id',
+        'parent_loop_id',
         'is_fallback',
-        'max_daily_tokens',
+        'is_global',
+        'max_daily_spots',
+        'assigned_devices',
+        'order_index',
     ];
 
     protected $casts = [
         'is_fallback'      => 'boolean',
-        'max_daily_tokens' => 'integer',
+        'is_global'        => 'boolean',
+        'max_daily_spots' => 'integer',
+        'assigned_devices' => 'array',
     ];
 
     // ── Relationships ────────────────────────────────────────────────────────
 
     public function parent(): BelongsTo
     {
-        return $this->belongsTo(MediaFolder::class, 'parent_folder_id');
+        return $this->belongsTo(MediaLoop::class, 'parent_loop_id');
     }
 
     public function children(): HasMany
     {
-        return $this->hasMany(MediaFolder::class, 'parent_folder_id');
+        return $this->hasMany(MediaLoop::class, 'parent_loop_id');
     }
 
     public function assets(): HasMany
     {
-        return $this->hasMany(MediaAsset::class, 'folder_id');
+        return $this->hasMany(MediaAsset::class, 'loop_id');
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
-     * Total tokens spent today across all assets in this folder.
+     * Total spots spent today across all assets in this loop.
      * Used by ConstraintValidationService for macro-level cap enforcement.
      */
-    public function tokensSpentToday(): int
+    public function spotsSpentToday(): int
     {
         return PlaybackLog::whereIn(
             'asset_id',
             $this->assets()->pluck('id')
         )
         ->where('played_at', '>=', now()->startOfDay())
-        ->sum('token_spent');
+        ->sum('spot_spent');
     }
 
-    /** Is this folder at or over its daily cap? */
+    /** Is this loop at or over its daily cap? */
     public function isDailyCapped(): bool
     {
-        if ($this->max_daily_tokens === null) {
+        if ($this->max_daily_spots === null) {
             return false;
         }
 
-        return $this->tokensSpentToday() >= $this->max_daily_tokens;
+        return $this->spotsSpentToday() >= $this->max_daily_spots;
     }
 }

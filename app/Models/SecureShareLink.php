@@ -16,7 +16,7 @@ class SecureShareLink extends Model
 
     protected $fillable = [
         'label',
-        'folder_id',
+        'loop_id',
         'asset_id',
         'token',
         'password_hash',
@@ -37,9 +37,9 @@ class SecureShareLink extends Model
 
     // ── Relationships ────────────────────────────────────────────────────────
 
-    public function folder(): BelongsTo
+    public function loop(): BelongsTo
     {
-        return $this->belongsTo(MediaFolder::class, 'folder_id');
+        return $this->belongsTo(MediaLoop::class, 'loop_id');
     }
 
     public function asset(): BelongsTo

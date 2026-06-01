@@ -21,7 +21,7 @@ class SecureShareLinkTest extends TestCase
     {
         return SecureShareLink::create(array_merge([
             'label'         => 'Test Campaign Proof',
-            'folder_id'     => null,
+            'loop_id'     => null,
             'asset_id'      => null,
             'token'         => $this->token,
             'password_hash' => Hash::make($this->pin),
@@ -161,7 +161,7 @@ class SecureShareLinkTest extends TestCase
             'size_bytes'            => 5_000_000,
             'duration_secs'         => 15,
             'is_synced'             => true,
-            'play_tokens_remaining' => 100,
+            'play_spots_remaining' => 100,
         ]);
 
         $this->makeLink(['asset_id' => $asset->id]);

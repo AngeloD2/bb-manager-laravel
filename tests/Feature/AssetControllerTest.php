@@ -4,9 +4,10 @@ namespace Tests\Feature;
 
 use App\Models\Device;
 use App\Models\MediaAsset;
-use App\Models\MediaFolder;
+use App\Models\MediaLoop;
 use App\Services\S3Service;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Tests\TestCase;
 
 class AssetControllerTest extends TestCase
@@ -21,97 +22,85 @@ class AssetControllerTest extends TestCase
 
         $this->adminDevice = Device::create(['name' => 'Admin App', 'location' => 'HQ']);
 
-        // Mock S3Service so tests don't need real AWS credentials
         $this->mock(S3Service::class, function ($mock) {
             $mock->shouldReceive('buildObjectKey')
                  ->andReturn('media/2026/01/test-uuid-ad-title.mp4');
 
-            $mock->shouldReceive('presignedPutUrl')
-                 ->andReturn([
-                     'upload_url' => 'https://s3.amazonaws.com/bucket/media/2026/01/test.mp4?X-Amz-Signature=abc',
-                     'object_key' => 'media/2026/01/test.mp4',
-                     'expires_in' => 300,
-                     'method'     => 'PUT',
-                 ]);
-
+            $mock->shouldReceive('upload')->andReturn(null);
             $mock->shouldReceive('deleteObject')->andReturn(null);
         });
     }
 
-    // ── Presigned URL generation ──────────────────────────────────────────────
+    // ── Upload endpoint ──────────────────────────────────────────────────────
 
     /** @test */
-    public function it_generates_a_presigned_put_url_for_valid_video_upload(): void
-    {
-        $this->actAsAdmin()
-            ->postJson('/api/v1/admin/assets/presigned-url', [
-                'filename'  => 'coca_cola_summer.mp4',
-                'mime_type' => 'video/mp4',
-            ])
-            ->assertOk()
-            ->assertJsonStructure([
-                'data' => ['upload_url', 'object_key', 'expires_in', 'method'],
-            ])
-            ->assertJsonPath('data.method', 'PUT');
-    }
-
-    /** @test */
-    public function presigned_url_rejects_unsupported_mime_types(): void
-    {
-        $this->actAsAdmin()
-            ->postJson('/api/v1/admin/assets/presigned-url', [
-                'filename'  => 'malware.exe',
-                'mime_type' => 'application/octet-stream',
-            ])
-            ->assertUnprocessable();
-    }
-
-    // ── Confirm upload / AssetProcessingJob dispatch ──────────────────────────
-
-    /** @test */
-    public function confirm_upload_dispatches_asset_processing_job(): void
+    public function upload_stores_file_and_creates_asset(): void
     {
         \Illuminate\Support\Facades\Queue::fake();
 
-        $folder = MediaFolder::create(['name' => 'Promo', 'is_fallback' => false]);
-        $asset  = MediaAsset::create([
-            'name'                  => 'New Nike Ad',
-            'file_path'             => 'media/2026/01/test.mp4',
-            'file_type'             => 'VIDEO',
-            'folder_id'             => $folder->id,
-            'size_bytes'            => 15_000_000,
-            'duration_secs'         => 10,
-            'is_synced'             => false,
-            'play_tokens_remaining' => 100,
-        ]);
+        $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false]);
 
         $this->actAsAdmin()
-            ->postJson("/api/v1/admin/assets/{$asset->id}/confirm")
-            ->assertOk()
-            ->assertJsonPath('message', 'Upload confirmed. Asset is being processed.');
+            ->post('/api/v1/admin/assets/upload', [
+                'file'                 => UploadedFile::fake()->create('summer_ad.mp4', 5000, 'video/mp4'),
+                'name'                 => 'Summer Ad',
+                'file_type'            => 'VIDEO',
+                'loop_id'              => $loop->id,
+                'size_bytes'           => 5_000_000,
+                'duration_secs'        => 10,
+                'campaign_name'        => 'Summer Campaign',
+                'play_spots_remaining' => 100,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.name', 'Summer Ad')
+            ->assertJsonPath('data.file_path', 'media/2026/01/test-uuid-ad-title.mp4')
+            ->assertJsonPath('data.is_synced', false);
 
-        \Illuminate\Support\Facades\Queue::assertPushed(
-            \App\Jobs\AssetProcessingJob::class,
-            fn ($job) => $this->readPrivate($job, 'assetId') === $asset->id
-        );
+        $this->assertDatabaseHas('media_assets', [
+            'name'      => 'Summer Ad',
+            'file_type' => 'VIDEO',
+            'loop_id'   => $loop->id,
+        ]);
+
+        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\AssetProcessingJob::class);
     }
 
     /** @test */
-    public function confirm_upload_is_idempotent_when_asset_already_synced(): void
+    public function upload_rejects_unsupported_mime_types(): void
+    {
+        $this->actAsAdmin()
+            ->post('/api/v1/admin/assets/upload', [
+                'file'      => UploadedFile::fake()->create('malware.exe', 100, 'application/octet-stream'),
+                'name'      => 'Bad File',
+                'file_type' => 'VIDEO',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['file']);
+    }
+
+    /** @test */
+    public function upload_handles_json_string_arrays_from_form_data(): void
     {
         \Illuminate\Support\Facades\Queue::fake();
 
-        $asset = MediaAsset::create([
-            'name' => 'Already Synced', 'file_path' => 'media/done.mp4', 'file_type' => 'VIDEO',
-            'size_bytes' => 1000, 'duration_secs' => 10, 'is_synced' => true, 'play_tokens_remaining' => 50,
+        $conflict = MediaAsset::create([
+            'name' => 'Existing Ad', 'file_path' => 'media/existing.mp4', 'file_type' => 'VIDEO',
+            'size_bytes' => 1000, 'duration_secs' => 10, 'is_synced' => true, 'play_spots_remaining' => 50,
         ]);
 
         $this->actAsAdmin()
-            ->postJson("/api/v1/admin/assets/{$asset->id}/confirm")
-            ->assertOk()
-            ->assertJsonPath('message', 'Asset already confirmed.');
+            ->post('/api/v1/admin/assets/upload', [
+                'file'               => UploadedFile::fake()->create('ad.mp4', 3000, 'video/mp4'),
+                'name'               => 'New Ad',
+                'file_type'          => 'VIDEO',
+                'duration_secs'      => 10,
+                'conflict_asset_ids' => json_encode([$conflict->id]),
+                'assigned_devices'   => json_encode([$this->adminDevice->id]),
+            ])
+            ->assertCreated();
 
-        \Illuminate\Support\Facades\Queue::assertNothingPushed();
+        $asset = MediaAsset::where('name', 'New Ad')->first();
+        $this->assertContains($conflict->id, $asset->conflicts->pluck('id')->toArray());
     }
 
     // ── Duration constraint enforcement ──────────────────────────────────────
@@ -125,7 +114,7 @@ class AssetControllerTest extends TestCase
                 'file_path'     => 'media/short.mp4',
                 'file_type'     => 'VIDEO',
                 'size_bytes'    => 100000,
-                'duration_secs' => 5,   // < 8 seconds — invalid
+                'duration_secs' => 5,
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['duration_secs']);
@@ -138,7 +127,7 @@ class AssetControllerTest extends TestCase
     {
         $asset = MediaAsset::create([
             'name' => 'Old Ad', 'file_path' => 'media/old.mp4', 'file_type' => 'VIDEO',
-            'size_bytes' => 1000, 'duration_secs' => 10, 'is_synced' => true, 'play_tokens_remaining' => 10,
+            'size_bytes' => 1000, 'duration_secs' => 10, 'is_synced' => true, 'play_spots_remaining' => 10,
         ]);
 
         $this->actAsAdmin()
@@ -157,14 +146,7 @@ class AssetControllerTest extends TestCase
             'username' => 'admin-test-' . uniqid(),
             'password' => \Illuminate\Support\Facades\Hash::make('password'),
         ]);
-        $token = $adminUser->createToken('admin-token', ['admin'])->plainTextToken;
-        return $this->withToken($token);
-    }
-
-    private function readPrivate(object $obj, string $property): mixed
-    {
-        $ref = new \ReflectionProperty($obj, $property);
-        $ref->setAccessible(true);
-        return $ref->getValue($obj);
+        $spot = $adminUser->createToken('admin-spot', ['admin'])->plainTextToken;
+        return $this->withToken($spot);
     }
 }

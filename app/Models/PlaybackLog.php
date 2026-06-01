@@ -17,15 +17,15 @@ class PlaybackLog extends Model
 
     protected $fillable = [
         'asset_id',
-        'folder_id',
+        'loop_id',
         'device_id',
-        'token_spent',
+        'spot_spent',
         'was_override',
         'played_at',
     ];
 
     protected $casts = [
-        'token_spent'  => 'integer',
+        'spot_spent'  => 'integer',
         'was_override' => 'boolean',
         'played_at'    => 'datetime',
     ];

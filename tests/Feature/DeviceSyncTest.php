@@ -4,11 +4,13 @@ namespace Tests\Feature;
 
 use App\Models\Device;
 use App\Models\MediaAsset;
-use App\Models\MediaFolder;
+use App\Models\MediaLoop;
 use App\Models\TimelineOverride;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
+use Illuminate\Support\Facades\Event;
+use App\Events\PlaybackStarted;
 
 class DeviceSyncTest extends TestCase
 {
@@ -51,11 +53,11 @@ class DeviceSyncTest extends TestCase
     {
         $this->actAsDevice();
 
-        $folder = MediaFolder::create(['name' => 'Promo', 'is_fallback' => false]);
+        $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'is_global' => true]);
         MediaAsset::create([
             'name' => 'Nike Ad', 'file_path' => 'media/nike.mp4', 'file_type' => 'VIDEO',
-            'folder_id' => $folder->id, 'size_bytes' => 1000, 'duration_secs' => 10,
-            'is_synced' => true, 'play_tokens_remaining' => 50,
+            'loop_id' => $loop->id, 'size_bytes' => 1000, 'duration_secs' => 10,
+            'is_synced' => true, 'play_spots_remaining' => 50,
         ]);
 
         $this->getJson('/api/v1/sync')
@@ -63,7 +65,7 @@ class DeviceSyncTest extends TestCase
             ->assertJsonStructure([
                 'data' => [
                     'device',
-                    'folders',
+                    'loops',
                     'eligible_assets',
                     'fallback_assets',
                     'pending_overrides',
@@ -78,16 +80,16 @@ class DeviceSyncTest extends TestCase
     {
         $this->actAsDevice();
 
-        $folder = MediaFolder::create(['name' => 'Promo', 'is_fallback' => false]);
+        $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'is_global' => true]);
         MediaAsset::create([
             'name' => 'Exhausted Ad', 'file_path' => 'media/x.mp4', 'file_type' => 'VIDEO',
-            'folder_id' => $folder->id, 'size_bytes' => 1000, 'duration_secs' => 10,
-            'is_synced' => true, 'play_tokens_remaining' => 0,   // exhausted
+            'loop_id' => $loop->id, 'size_bytes' => 1000, 'duration_secs' => 10,
+            'is_synced' => true, 'play_spots_remaining' => 0,   // exhausted
         ]);
 
         $this->getJson('/api/v1/sync')
-            ->assertOk()
-            ->assertJsonCount(0, 'data.eligible_assets');
+             ->assertOk()
+             ->assertJsonCount(0, 'data.eligible_assets');
     }
 
     /** @test */
@@ -95,11 +97,11 @@ class DeviceSyncTest extends TestCase
     {
         $this->actAsDevice();
 
-        $fallback = MediaFolder::create(['name' => 'Filler', 'is_fallback' => true]);
+        $fallback = MediaLoop::create(['name' => 'Filler', 'is_fallback' => true, 'is_global' => true]);
         MediaAsset::create([
             'name' => 'Filler', 'file_path' => 'media/f.gif', 'file_type' => 'GIF',
-            'folder_id' => $fallback->id, 'size_bytes' => 500, 'duration_secs' => 8,
-            'is_synced' => true, 'play_tokens_remaining' => 0,
+            'loop_id' => $fallback->id, 'size_bytes' => 500, 'duration_secs' => 8,
+            'is_synced' => true, 'play_spots_remaining' => 0,
         ]);
 
         $this->getJson('/api/v1/sync')
@@ -148,6 +150,16 @@ class DeviceSyncTest extends TestCase
     // ── Heartbeat ─────────────────────────────────────────────────────────────
 
     /** @test */
+    public function device_token_must_have_sync_ability(): void
+    {
+        $token = $this->device->createToken('board', ['device:log'])->plainTextToken; // Wrong ability
+
+        $this->withToken($token)->getJson('/api/v1/sync')
+             ->assertStatus(403)
+             ->assertJsonPath('message', 'Token missing ability: device:sync');
+    }
+
+    /** @test */
     public function sync_updates_device_last_seen_at(): void
     {
         $this->actAsDevice();
@@ -160,6 +172,48 @@ class DeviceSyncTest extends TestCase
         $this->assertTrue($this->device->fresh()->is_online);
     }
 
+    /** @test */
+    public function sync_excludes_loops_and_assets_not_assigned_to_this_device(): void
+    {
+        $this->actAsDevice();
+
+        // Non-global loop with no device assignments
+        $otherLoop1 = MediaLoop::create(['name' => 'Other Promo', 'is_fallback' => false, 'is_global' => false]);
+        MediaAsset::create([
+            'name' => 'Other Nike Ad', 'file_path' => 'media/other-nike.mp4', 'file_type' => 'VIDEO',
+            'loop_id' => $otherLoop1->id, 'size_bytes' => 1000, 'duration_secs' => 10,
+            'is_synced' => true, 'play_spots_remaining' => 50,
+        ]);
+
+        // Non-global loop assigned to a different device
+        $otherDevice = Device::create([
+            'name'     => 'Board Beta',
+            'location' => 'Highway 1',
+            'geo_zone' => 'West Coast Highways',
+        ]);
+        $otherLoop2 = MediaLoop::create(['name' => 'Beta Promo', 'is_fallback' => false, 'is_global' => false, 'assigned_devices' => [$otherDevice->id]]);
+        MediaAsset::create([
+            'name' => 'Beta Nike Ad', 'file_path' => 'media/beta-nike.mp4', 'file_type' => 'VIDEO',
+            'loop_id' => $otherLoop2->id, 'size_bytes' => 1000, 'duration_secs' => 10,
+            'is_synced' => true, 'play_spots_remaining' => 50,
+        ]);
+
+        // Non-global loop explicitly assigned to this device
+        $myLoop = MediaLoop::create(['name' => 'My Promo', 'is_fallback' => false, 'is_global' => false, 'assigned_devices' => [$this->device->id]]);
+        MediaAsset::create([
+            'name' => 'My Nike Ad', 'file_path' => 'media/my-nike.mp4', 'file_type' => 'VIDEO',
+            'loop_id' => $myLoop->id, 'size_bytes' => 1000, 'duration_secs' => 10,
+            'is_synced' => true, 'play_spots_remaining' => 50,
+        ]);
+
+        $this->getJson('/api/v1/sync')
+            ->assertOk()
+            ->assertJsonCount(1, 'data.loops')
+            ->assertJsonPath('data.loops.0.id', $myLoop->id)
+            ->assertJsonCount(1, 'data.eligible_assets')
+            ->assertJsonPath('data.eligible_assets.0.loop_id', $myLoop->id);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function actAsDevice(): void
@@ -170,17 +224,50 @@ class DeviceSyncTest extends TestCase
 
     private function makeSyncedAsset(): MediaAsset
     {
-        $folder = MediaFolder::create(['name' => 'Test Folder', 'is_fallback' => false]);
+        $loop = MediaLoop::create(['name' => 'Test Loop', 'is_fallback' => false, 'is_global' => true]);
 
         return MediaAsset::create([
             'name'                  => 'Test Asset',
             'file_path'             => 'media/test.mp4',
             'file_type'             => 'VIDEO',
-            'folder_id'             => $folder->id,
+            'loop_id'             => $loop->id,
             'size_bytes'            => 1000,
             'duration_secs'         => 10,
             'is_synced'             => true,
-            'play_tokens_remaining' => 50,
+            'play_spots_remaining' => 50,
         ]);
+    }
+
+    /** @test */
+    public function device_can_report_playback_start(): void
+    {
+        Event::fake();
+
+        $this->actAsDevice();
+        $asset = $this->makeSyncedAsset();
+        $startedAt = now()->toIso8601String();
+
+        $this->postJson('/api/v1/playback/start', [
+            'asset_id'   => $asset->id,
+            'started_at' => $startedAt,
+        ])
+            ->assertOk()
+            ->assertJsonStructure([
+                'message',
+                'data' => [
+                    'device_id',
+                    'asset_id',
+                    'started_at',
+                ],
+            ]);
+
+        Event::assertDispatched(
+            PlaybackStarted::class,
+            function (PlaybackStarted $event) use ($asset, $startedAt) {
+                return $event->asset->id === $asset->id &&
+                       $event->device->id === $this->device->id &&
+                       $event->startedAt === $startedAt;
+            }
+        );
     }
 }

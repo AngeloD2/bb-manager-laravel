@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::create('secure_share_links', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->string('label');
-            $table->uuid('folder_id')->nullable();
+            $table->uuid('loop_id')->nullable();
             $table->uuid('asset_id')->nullable();
             $table->string('token', 8)->unique();           // short URL token, e.g. abc12def
             $table->string('password_hash');                 // bcrypt hash of the 6-digit PIN
@@ -21,7 +21,7 @@ return new class extends Migration
             $table->unsignedInteger('used_count')->default(0);
             $table->timestamps();
 
-            $table->foreign('folder_id')->references('id')->on('media_folders')->nullOnDelete();
+            $table->foreign('loop_id')->references('id')->on('media_loops')->nullOnDelete();
             $table->foreign('asset_id')->references('id')->on('media_assets')->nullOnDelete();
         });
     }

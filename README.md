@@ -21,6 +21,19 @@ Central source of truth for the React Native Expo billboard management app.
 
 ---
 
+## Recent Adjustments
+
+### Fallback Inventory & Loop Adjustments
+- **Grouped by Date**: The fallback inventory data models logically group records by day.
+- **Aggregated Counts**: Total number of Available and Sold slots are now tracked and aggregated per day and fallback loop.
+- **Simplified Tracking**: Database and API structures favor aggregating slot consumption per loop/date rather than exposing verbose individual distinct slot listings.
+
+### Vault & DB Simplification
+- **Geographic Zones Removed**: The concept of "Geographic Zones" was stripped from core models (`MediaAsset` and `Billboard`/devices), removing unnecessary filtering complexity.
+- **Media Folders Hierarchy**: Self-referencing hierarchies (`parent_id`) were fixed in database migrations, correctly establishing foreign keys for robust loop-level structure.
+
+---
+
 ## Setup
 
 ```bash
