@@ -85,6 +85,7 @@ class AssetController extends Controller
         ]);
 
         $assetData = collect($data)->except('conflict_asset_ids')->toArray();
+        $assetData['duration_secs'] = $assetData['duration_secs'] ?? 10;
         $asset = MediaAsset::create(array_merge($assetData, ['is_synced' => false]));
 
         if ($request->has('conflict_asset_ids')) {
@@ -163,7 +164,7 @@ class AssetController extends Controller
     public function upload(Request $request): JsonResponse
     {
         $request->validate([
-            'file'                  => ['required', 'file', 'mimetypes:video/mp4,image/gif,image/png,image/jpeg,image/webp'],
+            'file'                  => ['required', 'file', 'mimetypes:video/mp4,video/quicktime,image/gif,image/png,image/jpeg,image/webp'],
             'name'                  => ['required', 'string', 'max:200'],
             'file_type'             => ['required', 'in:VIDEO,GIF,PHOTO'],
             'loop_id'               => ['nullable', 'uuid', 'exists:media_loops,id'],
@@ -201,7 +202,7 @@ class AssetController extends Controller
             'file_type'             => $request->file_type,
             'loop_id'               => $request->loop_id,
             'size_bytes'            => $request->size_bytes ?? $file->getSize(),
-            'duration_secs'         => $request->duration_secs,
+            'duration_secs'         => $request->duration_secs ?? 10,
             'geo_campaign'          => $request->geo_campaign,
             'campaign_name'         => $request->campaign_name,
             'max_plays_per_hour'    => $request->max_plays_per_hour,
