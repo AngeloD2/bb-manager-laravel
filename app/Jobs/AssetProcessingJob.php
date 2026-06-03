@@ -50,9 +50,7 @@ class AssetProcessingJob implements ShouldQueue
         try {
             $metadata = $this->extractMetadata($asset);
 
-            if ($this->stretchToFit) {
-                $this->stretchToBillboard($asset, $metadata, $s3);
-            }
+            $this->processMedia($asset, $metadata, $s3);
 
             $asset->update([
                 'duration_secs' => $this->clampDuration($metadata['duration'] ?? $asset->duration_secs),
@@ -112,22 +110,23 @@ class AssetProcessingJob implements ShouldQueue
     }
 
     /**
-     * Re-encode the asset so it exactly fills the billboard canvas.
-     *
-     * FFmpeg's `scale=W:H` filter does NOT preserve aspect ratio — the source
-     * is deliberately stretched to the panel's dimensions, which is the whole
-     * point of the "stretch to fit" upload toggle.
+     * Process the asset. If stretchToFit is true, stretch it to exactly fill the billboard.
+     * Otherwise, optimize it and proportionally scale it to fit within bounds.
+     * Universally transcodes video to web-optimized MP4 with faststart.
      *
      * @param array{duration: float, width: int, height: int} $metadata
      */
-    private function stretchToBillboard(MediaAsset $asset, array $metadata, S3Service $s3): void
+    private function processMedia(MediaAsset $asset, array $metadata, S3Service $s3): void
     {
         $targetW = (int) config('media.billboard_width', 3648);
         $targetH = (int) config('media.billboard_height', 1152);
 
-        // Already the right size — nothing to re-encode.
-        if ($metadata['width'] === $targetW && $metadata['height'] === $targetH) {
-            Log::info('AssetProcessingJob: asset already at billboard size, skipping stretch', [
+        $isPerfectSize = ($metadata['width'] === $targetW && $metadata['height'] === $targetH);
+
+        // If it's a non-video already at the perfect size, we can skip processing.
+        // For video, we ALWAYS want to re-encode to ensure web-optimization and MP4 container.
+        if ($isPerfectSize && $asset->file_type !== 'VIDEO') {
+            Log::info('AssetProcessingJob: image already at billboard size, skipping', [
                 'asset_id' => $asset->id,
             ]);
             return;
@@ -142,15 +141,21 @@ class AssetProcessingJob implements ShouldQueue
         };
 
         $srcUrl  = Storage::disk('s3')->temporaryUrl($asset->file_path, now()->addMinutes(10));
-        $outPath = tempnam(sys_get_temp_dir(), 'bbstretch_') . '.' . $ext;
+        $outPath = tempnam(sys_get_temp_dir(), 'bbmedia_') . '.' . $ext;
 
-        // setsar=1 forces square pixels so downstream players don't "correct"
-        // the stretch back toward the original aspect ratio.
-        $vf = sprintf('scale=%d:%d,setsar=1', $targetW, $targetH);
+        if ($this->stretchToFit) {
+            // setsar=1 forces square pixels so players don't "correct" the stretch
+            $vf = sprintf('scale=%d:%d,setsar=1', $targetW, $targetH);
+        } else {
+            // Proportional scale to fit inside target dimensions
+            $vf = sprintf("scale='min(%d,iw)':'min(%d,ih)':force_original_aspect_ratio=decrease", $targetW, $targetH);
+        }
 
         if ($asset->file_type === 'VIDEO') {
+            // libx264 requires even dimensions for yuv420p
+            $vf .= ',pad=ceil(iw/2)*2:ceil(ih/2)*2';
             $command = sprintf(
-                '%s -y -i %s -vf %s -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a copy %s 2>&1',
+                '%s -y -i %s -vf %s -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k %s 2>&1',
                 escapeshellarg($ffmpeg),
                 escapeshellarg($srcUrl),
                 escapeshellarg($vf),
@@ -172,18 +177,33 @@ class AssetProcessingJob implements ShouldQueue
         if (! is_file($outPath) || filesize($outPath) === 0) {
             @unlink($outPath);
             throw new \RuntimeException(
-                "FFmpeg stretch produced no output for asset {$asset->id}: " . trim((string) $output)
+                "FFmpeg processing produced no output for asset {$asset->id}: " . trim((string) $output)
             );
         }
 
         try {
-            $s3->uploadPath($asset->file_path, $outPath, $contentType);
-            $asset->update(['size_bytes' => filesize($outPath)]);
+            $oldPath = $asset->file_path;
+            
+            // Update the extension (e.g. .mov to .mp4)
+            $pathParts = pathinfo($oldPath);
+            $dir = $pathParts['dirname'] === '.' ? '' : $pathParts['dirname'] . '/';
+            $newPath = $dir . $pathParts['filename'] . '.' . $ext;
 
-            Log::info('AssetProcessingJob: stretched asset to billboard size', [
+            $s3->uploadPath($newPath, $outPath, $contentType);
+            
+            if ($oldPath !== $newPath) {
+                Storage::disk('s3')->delete($oldPath);
+            }
+
+            $asset->update([
+                'size_bytes' => filesize($outPath),
+                'file_path'  => $newPath,
+            ]);
+
+            Log::info('AssetProcessingJob: optimized asset', [
                 'asset_id' => $asset->id,
                 'from'     => "{$metadata['width']}x{$metadata['height']}",
-                'to'       => "{$targetW}x{$targetH}",
+                'to'       => $this->stretchToFit ? "{$targetW}x{$targetH}" : 'proportional',
             ]);
         } finally {
             @unlink($outPath);
