@@ -12,8 +12,8 @@
 
 return [
 
-    'ffmpeg_binaries'  => env('FFMPEG_BINARIES',  '/usr/bin/ffmpeg'),
-    'ffprobe_binaries' => env('FFPROBE_BINARIES', '/usr/bin/ffprobe'),
+    'ffmpeg_binaries'  => env('FFMPEG_BINARIES',  base_path('bin/ffmpeg')),
+    'ffprobe_binaries' => env('FFPROBE_BINARIES', base_path('bin/ffprobe')),
 
     /*
     |----------------------------------------------------------------------

@@ -21,6 +21,7 @@ class MediaAssetResource extends JsonResource
             'geo_campaign'          => $this->geo_campaign,
             'campaign_name'         => $this->campaign_name,
             'is_synced'             => $this->is_synced,
+            'sync_error'            => $this->sync_error,
             'is_global'             => $this->is_global,
             'max_plays_per_hour'    => $this->max_plays_per_hour,
             'max_daily_plays'       => $this->max_daily_plays,

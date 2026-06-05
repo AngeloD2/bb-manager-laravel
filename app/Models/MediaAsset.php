@@ -34,6 +34,7 @@ class MediaAsset extends Model
         'campaign_start_date',
         'campaign_end_date',
         'playback_times',
+        'sync_error',
     ];
 
     protected $casts = [
