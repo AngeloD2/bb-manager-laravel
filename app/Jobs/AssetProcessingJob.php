@@ -315,16 +315,16 @@ class AssetProcessingJob implements ShouldQueue
         return [30, 60, 120]; // seconds between retries
     }
 
-    /**
-     * Handle a job failure after all retries are exhausted.
-     */
     public function failed(\Throwable $exception): void
     {
         $asset = MediaAsset::find($this->assetId);
         if ($asset) {
-            $asset->update([
-                'sync_error' => $exception->getMessage(),
-            ]);
+            // Only overwrite if it hasn't been set by handle()'s try-catch block
+            if (empty($asset->sync_error)) {
+                $asset->update([
+                    'sync_error' => $exception->getMessage(),
+                ]);
+            }
 
             // Notify clients of the failure
             app(\App\Services\DeviceNotifier::class)->notifyScheduleChanged();
