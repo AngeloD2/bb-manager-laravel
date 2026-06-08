@@ -117,7 +117,7 @@ class AssetProcessingJob implements ShouldQueue
         $data     = json_decode($output, true);
         
         if (!$data || empty($data['streams'])) {
-            throw new \RuntimeException("Invalid media file: ffprobe could not detect any streams.");
+            throw new \RuntimeException("Invalid media file: ffprobe could not detect any streams. Raw output: " . trim((string) $output));
         }
 
         $stream   = collect($data['streams'])->firstWhere('codec_type', 'video');
