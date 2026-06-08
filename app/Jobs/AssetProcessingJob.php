@@ -89,51 +89,99 @@ class AssetProcessingJob implements ShouldQueue
     }
 
     /**
-     * Run FFprobe against the S3-hosted file using a temporary presigned URL.
+     * Run FFprobe against the S3 file by downloading it to a local temp file first.
+     *
+     * Many container ffprobe builds (including Laravel Cloud's) are compiled
+     * without HTTPS/TLS support, so passing a presigned URL directly fails
+     * silently (ffprobe returns empty JSON `{}`). Downloading first guarantees
+     * ffprobe always reads a real local file.
      *
      * @return array{duration: float, width: int, height: int, codec: string}
      */
     private function extractMetadata(MediaAsset $asset): array
     {
-        // Get a short-lived URL to let FFprobe stream from S3
-        $url = Storage::disk('s3')->temporaryUrl($asset->file_path, now()->addMinutes(5));
+        // ── Diagnostics: log what S3 actually has ──────────────────────────
+        $exists  = Storage::disk('s3')->exists($asset->file_path);
+        $s3Size  = $exists ? Storage::disk('s3')->size($asset->file_path) : 0;
 
-        $ffprobe = config('media.ffprobe_binaries', '/usr/bin/ffprobe');
+        Log::info('AssetProcessingJob: S3 diagnostics', [
+            'asset_id'  => $asset->id,
+            'file_path' => $asset->file_path,
+            'exists'    => $exists,
+            's3_size'   => $s3Size,
+        ]);
 
-        $command = sprintf(
-            '%s -v quiet -print_format json -show_streams -show_format %s 2>&1',
-            escapeshellarg($ffprobe),
-            escapeshellarg($url)
-        );
-
-        $output = shell_exec($command);
-
-        if (! $output) {
-            // FFprobe not available in environment — return asset defaults
-            Log::warning('AssetProcessingJob: FFprobe unavailable, using defaults', ['asset_id' => $asset->id]);
-            return ['duration' => (float) $asset->duration_secs, 'width' => 0, 'height' => 0, 'codec' => ''];
+        if (!$exists || $s3Size === 0) {
+            throw new \RuntimeException(
+                "S3 file missing or empty: exists={$exists}, size={$s3Size}, path={$asset->file_path}"
+            );
         }
 
-        $data     = json_decode($output, true);
-        
-        if (!$data || empty($data['streams'])) {
-            throw new \RuntimeException("Invalid media file: ffprobe could not detect any streams. Raw output: " . trim((string) $output));
+        // ── Download to local temp file ────────────────────────────────────
+        $ext     = pathinfo($asset->file_path, PATHINFO_EXTENSION) ?: 'mp4';
+        $tmpFile = tempnam(sys_get_temp_dir(), 'bbprobe_') . '.' . $ext;
+
+        try {
+            $stream = Storage::disk('s3')->readStream($asset->file_path);
+            if (!$stream) {
+                throw new \RuntimeException("Failed to open S3 read stream for {$asset->file_path}");
+            }
+            file_put_contents($tmpFile, $stream);
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+
+            $localSize = filesize($tmpFile);
+            Log::info('AssetProcessingJob: downloaded for probe', [
+                'asset_id'   => $asset->id,
+                'local_size' => $localSize,
+            ]);
+
+            if ($localSize === 0) {
+                throw new \RuntimeException("Downloaded temp file is 0 bytes for {$asset->file_path}");
+            }
+
+            // ── Run FFprobe on the local file ──────────────────────────────
+            $ffprobe = config('media.ffprobe_binaries', '/usr/bin/ffprobe');
+
+            $command = sprintf(
+                '%s -v error -print_format json -show_streams -show_format %s 2>&1',
+                escapeshellarg($ffprobe),
+                escapeshellarg($tmpFile)
+            );
+
+            $output = shell_exec($command);
+
+            if (!$output) {
+                Log::warning('AssetProcessingJob: FFprobe unavailable, using defaults', ['asset_id' => $asset->id]);
+                return ['duration' => (float) $asset->duration_secs, 'width' => 0, 'height' => 0, 'codec' => ''];
+            }
+
+            $data = json_decode($output, true);
+
+            if (!$data || empty($data['streams'])) {
+                throw new \RuntimeException(
+                    "ffprobe found no streams. local_size={$localSize}, raw_output=" . trim((string) $output)
+                );
+            }
+
+            $stream = collect($data['streams'])->firstWhere('codec_type', 'video');
+
+            if (!$stream) {
+                throw new \RuntimeException("No video/image stream detected by ffprobe.");
+            }
+
+            $duration = (float) ($data['format']['duration'] ?? $asset->duration_secs);
+
+            return [
+                'duration' => $duration,
+                'width'    => (int) ($stream['width']  ?? 0),
+                'height'   => (int) ($stream['height'] ?? 0),
+                'codec'    => (string) ($stream['codec_name'] ?? ''),
+            ];
+        } finally {
+            @unlink($tmpFile);
         }
-
-        $stream   = collect($data['streams'])->firstWhere('codec_type', 'video');
-        
-        if (!$stream) {
-            throw new \RuntimeException("Invalid media file: no video/image stream detected by ffprobe.");
-        }
-
-        $duration = (float) ($data['format']['duration'] ?? $asset->duration_secs);
-
-        return [
-            'duration' => $duration,
-            'width'    => (int) ($stream['width']  ?? 0),
-            'height'   => (int) ($stream['height'] ?? 0),
-            'codec'    => (string) ($stream['codec_name'] ?? ''),
-        ];
     }
 
     /**

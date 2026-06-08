@@ -217,7 +217,12 @@ class AssetController extends Controller
         if (!Storage::disk('s3')->exists($request->object_key)) {
             return response()->json(['message' => 'File not found in S3.'], 400);
         }
+
         $size = Storage::disk('s3')->size($request->object_key);
+        
+        if ($size === 0) {
+            return response()->json(['message' => 'The uploaded file is 0 bytes on Cloudflare R2. The upload stream failed.'], 400);
+        }
 
         if ($size > 5368709120) {
             Storage::disk('s3')->delete($request->object_key);
