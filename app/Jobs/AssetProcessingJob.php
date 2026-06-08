@@ -17,11 +17,15 @@ use Illuminate\Support\Facades\Storage;
  *
  * Dispatched after the frontend confirms a successful S3 PUT.
  * Responsibilities:
- *  1. Download a small sample of the file from S3 to run FFprobe.
- *  2. Extract duration and resolution metadata.
+ *  1. Download the file from S3 to a local temp file.
+ *  2. Extract duration and resolution metadata via FFprobe.
  *  3. Clamp duration to the 8–15 second display window rule.
  *  4. Optionally stretch the media to the billboard's exact dimensions.
  *  5. Mark the asset as is_synced = true.
+ *
+ * IMPORTANT: Laravel Cloud containers cannot resolve Cloudflare R2 hostnames
+ * via DNS, so ffprobe/ffmpeg cannot stream from presigned URLs. All media
+ * processing uses local temp files downloaded via the PHP S3 SDK.
  *
  * On failure the job retries 3 times with exponential backoff.
  */
@@ -49,16 +53,50 @@ class AssetProcessingJob implements ShouldQueue
             'stretch_to_fit' => $this->stretchToFit,
         ]);
 
+        // ── Download source file from S3 once ──────────────────────────────
+        $ext     = pathinfo($asset->file_path, PATHINFO_EXTENSION) ?: 'mp4';
+        $srcFile = tempnam(sys_get_temp_dir(), 'bbsrc_') . '.' . $ext;
+
         try {
-            if (!$asset->size_bytes) {
-                if (Storage::disk('s3')->exists($asset->file_path)) {
-                    $asset->size_bytes = Storage::disk('s3')->size($asset->file_path);
-                }
+            $exists = Storage::disk('s3')->exists($asset->file_path);
+            $s3Size = $exists ? Storage::disk('s3')->size($asset->file_path) : 0;
+
+            Log::info('AssetProcessingJob: S3 diagnostics', [
+                'asset_id'  => $asset->id,
+                'file_path' => $asset->file_path,
+                'exists'    => $exists,
+                's3_size'   => $s3Size,
+            ]);
+
+            if (!$exists || $s3Size === 0) {
+                throw new \RuntimeException(
+                    "S3 file missing or empty: exists={$exists}, size={$s3Size}, path={$asset->file_path}"
+                );
             }
 
-            $metadata = $this->extractMetadata($asset);
+            $stream = Storage::disk('s3')->readStream($asset->file_path);
+            if (!$stream) {
+                throw new \RuntimeException("Failed to open S3 read stream for {$asset->file_path}");
+            }
+            file_put_contents($srcFile, $stream);
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
 
-            $this->processMedia($asset, $metadata);
+            if (!$asset->size_bytes) {
+                $asset->size_bytes = $s3Size;
+            }
+
+            Log::info('AssetProcessingJob: downloaded source', [
+                'asset_id'   => $asset->id,
+                'local_size' => filesize($srcFile),
+            ]);
+
+            // ── Extract metadata ───────────────────────────────────────────
+            $metadata = $this->extractMetadata($asset, $srcFile);
+
+            // ── Process (resize / transcode) ───────────────────────────────
+            $this->processMedia($asset, $metadata, $srcFile);
 
             $probedDuration = $metadata['duration'] ?? $asset->duration_secs;
 
@@ -83,115 +121,66 @@ class AssetProcessingJob implements ShouldQueue
                 'error'    => $e->getMessage(),
             ]);
 
-            // Do not mark synced on failure — leave for retry or manual fix.
             throw $e;
+        } finally {
+            @unlink($srcFile);
         }
     }
 
     /**
-     * Run FFprobe against the S3 file by downloading it to a local temp file first.
-     *
-     * Many container ffprobe builds (including Laravel Cloud's) are compiled
-     * without HTTPS/TLS support, so passing a presigned URL directly fails
-     * silently (ffprobe returns empty JSON `{}`). Downloading first guarantees
-     * ffprobe always reads a real local file.
+     * Run FFprobe against a local file to extract media metadata.
      *
      * @return array{duration: float, width: int, height: int, codec: string}
      */
-    private function extractMetadata(MediaAsset $asset): array
+    private function extractMetadata(MediaAsset $asset, string $localPath): array
     {
-        // ── Diagnostics: log what S3 actually has ──────────────────────────
-        $exists  = Storage::disk('s3')->exists($asset->file_path);
-        $s3Size  = $exists ? Storage::disk('s3')->size($asset->file_path) : 0;
+        $ffprobe = config('media.ffprobe_binaries', '/usr/bin/ffprobe');
 
-        Log::info('AssetProcessingJob: S3 diagnostics', [
-            'asset_id'  => $asset->id,
-            'file_path' => $asset->file_path,
-            'exists'    => $exists,
-            's3_size'   => $s3Size,
-        ]);
+        $command = sprintf(
+            '%s -v error -print_format json -show_streams -show_format %s 2>&1',
+            escapeshellarg($ffprobe),
+            escapeshellarg($localPath)
+        );
 
-        if (!$exists || $s3Size === 0) {
+        $output = shell_exec($command);
+
+        if (!$output) {
+            Log::warning('AssetProcessingJob: FFprobe unavailable, using defaults', ['asset_id' => $asset->id]);
+            return ['duration' => (float) $asset->duration_secs, 'width' => 0, 'height' => 0, 'codec' => ''];
+        }
+
+        $data = json_decode($output, true);
+
+        if (!$data || empty($data['streams'])) {
             throw new \RuntimeException(
-                "S3 file missing or empty: exists={$exists}, size={$s3Size}, path={$asset->file_path}"
+                "ffprobe found no streams. file_size=" . filesize($localPath) . ", raw_output=" . trim((string) $output)
             );
         }
 
-        // ── Download to local temp file ────────────────────────────────────
-        $ext     = pathinfo($asset->file_path, PATHINFO_EXTENSION) ?: 'mp4';
-        $tmpFile = tempnam(sys_get_temp_dir(), 'bbprobe_') . '.' . $ext;
+        $stream = collect($data['streams'])->firstWhere('codec_type', 'video');
 
-        try {
-            $stream = Storage::disk('s3')->readStream($asset->file_path);
-            if (!$stream) {
-                throw new \RuntimeException("Failed to open S3 read stream for {$asset->file_path}");
-            }
-            file_put_contents($tmpFile, $stream);
-            if (is_resource($stream)) {
-                fclose($stream);
-            }
-
-            $localSize = filesize($tmpFile);
-            Log::info('AssetProcessingJob: downloaded for probe', [
-                'asset_id'   => $asset->id,
-                'local_size' => $localSize,
-            ]);
-
-            if ($localSize === 0) {
-                throw new \RuntimeException("Downloaded temp file is 0 bytes for {$asset->file_path}");
-            }
-
-            // ── Run FFprobe on the local file ──────────────────────────────
-            $ffprobe = config('media.ffprobe_binaries', '/usr/bin/ffprobe');
-
-            $command = sprintf(
-                '%s -v error -print_format json -show_streams -show_format %s 2>&1',
-                escapeshellarg($ffprobe),
-                escapeshellarg($tmpFile)
-            );
-
-            $output = shell_exec($command);
-
-            if (!$output) {
-                Log::warning('AssetProcessingJob: FFprobe unavailable, using defaults', ['asset_id' => $asset->id]);
-                return ['duration' => (float) $asset->duration_secs, 'width' => 0, 'height' => 0, 'codec' => ''];
-            }
-
-            $data = json_decode($output, true);
-
-            if (!$data || empty($data['streams'])) {
-                throw new \RuntimeException(
-                    "ffprobe found no streams. local_size={$localSize}, raw_output=" . trim((string) $output)
-                );
-            }
-
-            $stream = collect($data['streams'])->firstWhere('codec_type', 'video');
-
-            if (!$stream) {
-                throw new \RuntimeException("No video/image stream detected by ffprobe.");
-            }
-
-            $duration = (float) ($data['format']['duration'] ?? $asset->duration_secs);
-
-            return [
-                'duration' => $duration,
-                'width'    => (int) ($stream['width']  ?? 0),
-                'height'   => (int) ($stream['height'] ?? 0),
-                'codec'    => (string) ($stream['codec_name'] ?? ''),
-            ];
-        } finally {
-            @unlink($tmpFile);
+        if (!$stream) {
+            throw new \RuntimeException("No video/image stream detected by ffprobe.");
         }
+
+        $duration = (float) ($data['format']['duration'] ?? $asset->duration_secs);
+
+        return [
+            'duration' => $duration,
+            'width'    => (int) ($stream['width']  ?? 0),
+            'height'   => (int) ($stream['height'] ?? 0),
+            'codec'    => (string) ($stream['codec_name'] ?? ''),
+        ];
     }
 
     /**
-     * Process the asset. If stretchToFit is true, stretch it to exactly fill the billboard.
-     * Otherwise, optimize it and proportionally scale it to fit within bounds.
-     * Universally transcodes video to web-optimized MP4 with faststart.
+     * Process the asset using a local source file. If stretchToFit is true,
+     * stretch it to exactly fill the billboard. Otherwise, optimize it and
+     * proportionally scale it to fit within bounds. Uploads the result back to S3.
      *
      * @param array{duration: float, width: int, height: int, codec: string} $metadata
      */
-    private function processMedia(MediaAsset $asset, array $metadata): void
+    private function processMedia(MediaAsset $asset, array $metadata, string $localSrcPath): void
     {
         $targetW = (int) config('media.billboard_width', 3648);
         $targetH = (int) config('media.billboard_height', 1152);
@@ -234,7 +223,6 @@ class AssetProcessingJob implements ShouldQueue
             default => ['jpg', 'image/jpeg'],
         };
 
-        $srcUrl  = Storage::disk('s3')->temporaryUrl($asset->file_path, now()->addMinutes(10));
         $outPath = tempnam(sys_get_temp_dir(), 'bbmedia_') . '.' . $ext;
 
         if ($this->stretchToFit) {
@@ -251,7 +239,7 @@ class AssetProcessingJob implements ShouldQueue
             $command = sprintf(
                 '%s -y -i %s -vf %s -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -c:a aac -b:a 128k %s 2>&1',
                 escapeshellarg($ffmpeg),
-                escapeshellarg($srcUrl),
+                escapeshellarg($localSrcPath),
                 escapeshellarg($vf),
                 escapeshellarg($outPath)
             );
@@ -260,7 +248,7 @@ class AssetProcessingJob implements ShouldQueue
             $command = sprintf(
                 '%s -y -i %s -vf %s %s 2>&1',
                 escapeshellarg($ffmpeg),
-                escapeshellarg($srcUrl),
+                escapeshellarg($localSrcPath),
                 escapeshellarg($vf),
                 escapeshellarg($outPath)
             );
