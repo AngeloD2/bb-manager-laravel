@@ -78,7 +78,12 @@ class AssetProcessingJob implements ShouldQueue
             if (!$stream) {
                 throw new \RuntimeException("Failed to open S3 read stream for {$asset->file_path}");
             }
-            file_put_contents($srcFile, $stream);
+            $target = fopen($srcFile, 'wb');
+            if (!$target) {
+                throw new \RuntimeException("Failed to open local temp file for writing: {$srcFile}");
+            }
+            stream_copy_to_stream($stream, $target);
+            fclose($target);
             if (is_resource($stream)) {
                 fclose($stream);
             }
@@ -119,6 +124,10 @@ class AssetProcessingJob implements ShouldQueue
             Log::error("AssetProcessingJob: failed", [
                 'asset_id' => $asset->id,
                 'error'    => $e->getMessage(),
+            ]);
+
+            $asset->update([
+                'sync_error' => $e->getMessage(),
             ]);
 
             throw $e;
