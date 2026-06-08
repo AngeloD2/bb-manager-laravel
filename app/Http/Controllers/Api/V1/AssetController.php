@@ -184,6 +184,7 @@ class AssetController extends Controller
             'upload_url' => $uploadUrl,
             'headers'    => [
                 'Content-Type' => $request->content_type,
+                'Content-Length' => (string) $request->size_bytes,
             ],
             'expires_in' => $expiresIn,
         ]);
