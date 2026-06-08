@@ -156,19 +156,45 @@ class AssetController extends Controller
     // ── File Upload ─────────────────────────────────────────────────────────
 
     /**
-     * POST /api/v1/admin/assets/upload
-     *
-     * Accepts the file as multipart/form-data, uploads it to S3 server-side,
-     * creates the asset record, and dispatches the processing job.
+     * POST /api/v1/admin/assets/presign
+     * Generates a presigned PUT URL for direct-to-S3 uploads.
      */
-    public function upload(Request $request): JsonResponse
+    public function presign(Request $request): JsonResponse
     {
         $request->validate([
-            'file'                  => ['required', 'file', 'mimetypes:video/mp4,video/quicktime,image/gif,image/png,image/jpeg,image/webp'],
+            'original_name' => ['required', 'string'],
+            'file_type'     => ['required', 'in:VIDEO,GIF,PHOTO'],
+            'content_type'  => ['required', 'in:video/mp4,video/quicktime,image/gif,image/png,image/jpeg,image/webp'],
+            'size_bytes'    => ['required', 'integer', 'max:5368709120'], // 5GB limit
+        ]);
+
+        $objectKey = $this->s3->buildObjectKey($request->original_name);
+        $expiresIn = 900; // 15 minutes
+
+        $uploadUrl = $this->s3->presignedPutUrl($objectKey, $request->content_type, $expiresIn);
+
+        return response()->json([
+            'object_key' => $objectKey,
+            'upload_url' => $uploadUrl,
+            'headers'    => [
+                'Content-Type' => $request->content_type,
+            ],
+            'expires_in' => $expiresIn,
+        ]);
+    }
+
+    /**
+     * POST /api/v1/admin/assets/confirm
+     * Confirms that a presigned S3 upload finished, creates the asset record,
+     * and triggers the background processing job.
+     */
+    public function confirm(Request $request): JsonResponse
+    {
+        $request->validate([
+            'object_key'            => ['required', 'string'],
             'name'                  => ['required', 'string', 'max:200'],
             'file_type'             => ['required', 'in:VIDEO,GIF,PHOTO'],
             'loop_id'               => ['nullable', 'uuid', 'exists:media_loops,id'],
-            'size_bytes'            => ['nullable', 'integer', 'min:1'],
             'duration_secs'         => ['nullable', 'integer', 'min:1'],
             'geo_campaign'          => ['nullable', 'string', 'max:120'],
             'campaign_name'         => ['nullable', 'string', 'max:200'],
@@ -181,10 +207,15 @@ class AssetController extends Controller
             'stretch_to_fit'        => ['nullable'],
         ]);
 
-        $file = $request->file('file');
-        $objectKey = $this->s3->buildObjectKey($file->getClientOriginalName());
+        $meta = $this->s3->headObject($request->object_key);
+        if (!$meta) {
+            return response()->json(['message' => 'File not found in S3.'], 400);
+        }
 
-        $this->s3->upload($objectKey, $file);
+        if ($meta['size'] > 5368709120) {
+            $this->s3->deleteObject($request->object_key);
+            return response()->json(['message' => 'File exceeds 5GB limit.'], 400);
+        }
 
         $assignedDevices = $request->assigned_devices;
         if (is_string($assignedDevices)) {
@@ -198,10 +229,10 @@ class AssetController extends Controller
 
         $asset = MediaAsset::create([
             'name'                  => $request->name,
-            'file_path'             => $objectKey,
+            'file_path'             => $request->object_key,
             'file_type'             => $request->file_type,
             'loop_id'               => $request->loop_id,
-            'size_bytes'            => $request->size_bytes ?? $file->getSize(),
+            'size_bytes'            => $meta['size'],
             'duration_secs'         => $request->duration_secs ?? 10,
             'geo_campaign'          => $request->geo_campaign,
             'campaign_name'         => $request->campaign_name,
@@ -222,8 +253,6 @@ class AssetController extends Controller
             $asset->syncConflicts($conflictIds);
         }
 
-        // Default ON: stretch the media to the billboard's exact dimensions
-        // unless the uploader explicitly opted out.
         $stretchToFit = $request->has('stretch_to_fit')
             ? filter_var($request->stretch_to_fit, FILTER_VALIDATE_BOOLEAN)
             : true;

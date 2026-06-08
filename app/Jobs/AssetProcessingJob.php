@@ -31,7 +31,10 @@ class AssetProcessingJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries   = 3;
-    public int $timeout = 300;
+    // Large (up to ~500 MB) source files can take a while to transcode. Keep this
+    // below the queue's retry_after (DB_QUEUE_RETRY_AFTER) so the job isn't
+    // re-dispatched while still running.
+    public int $timeout = 1800;
 
     public function __construct(
         private readonly string $assetId,
@@ -48,12 +51,27 @@ class AssetProcessingJob implements ShouldQueue
         ]);
 
         try {
+            if (!$asset->size_bytes) {
+                $meta = $s3->headObject($asset->file_path);
+                if ($meta && isset($meta['size'])) {
+                    $asset->size_bytes = $meta['size'];
+                }
+            }
+
             $metadata = $this->extractMetadata($asset);
 
             $this->processMedia($asset, $metadata, $s3);
 
+            $probedDuration = $metadata['duration'] ?? $asset->duration_secs;
+
             $asset->update([
-                'duration_secs' => $this->clampDuration($metadata['duration'] ?? $asset->duration_secs),
+                // Videos play for their full, ffprobe-measured length. The 8–15s
+                // display-window clamp only applies to still media (photo/GIF),
+                // which has no intrinsic duration and uses a fixed dwell time.
+                'duration_secs' => $asset->file_type === 'VIDEO'
+                    ? max(1, (int) round($probedDuration))
+                    : $this->clampDuration($probedDuration),
+                'size_bytes'    => $asset->size_bytes,
                 'is_synced'     => true,
             ]);
 
@@ -75,7 +93,7 @@ class AssetProcessingJob implements ShouldQueue
     /**
      * Run FFprobe against the S3-hosted file using a temporary presigned URL.
      *
-     * @return array{duration: float, width: int, height: int}
+     * @return array{duration: float, width: int, height: int, codec: string}
      */
     private function extractMetadata(MediaAsset $asset): array
     {
@@ -95,17 +113,28 @@ class AssetProcessingJob implements ShouldQueue
         if (! $output) {
             // FFprobe not available in environment — return asset defaults
             Log::warning('AssetProcessingJob: FFprobe unavailable, using defaults', ['asset_id' => $asset->id]);
-            return ['duration' => (float) $asset->duration_secs, 'width' => 0, 'height' => 0];
+            return ['duration' => (float) $asset->duration_secs, 'width' => 0, 'height' => 0, 'codec' => ''];
         }
 
         $data     = json_decode($output, true);
+        
+        if (!$data || empty($data['streams'])) {
+            throw new \RuntimeException("Invalid media file: ffprobe could not detect any streams.");
+        }
+
+        $stream   = collect($data['streams'])->firstWhere('codec_type', 'video');
+        
+        if (!$stream) {
+            throw new \RuntimeException("Invalid media file: no video/image stream detected by ffprobe.");
+        }
+
         $duration = (float) ($data['format']['duration'] ?? $asset->duration_secs);
-        $stream   = collect($data['streams'] ?? [])->firstWhere('codec_type', 'video') ?? [];
 
         return [
             'duration' => $duration,
             'width'    => (int) ($stream['width']  ?? 0),
             'height'   => (int) ($stream['height'] ?? 0),
+            'codec'    => (string) ($stream['codec_name'] ?? ''),
         ];
     }
 
@@ -114,22 +143,41 @@ class AssetProcessingJob implements ShouldQueue
      * Otherwise, optimize it and proportionally scale it to fit within bounds.
      * Universally transcodes video to web-optimized MP4 with faststart.
      *
-     * @param array{duration: float, width: int, height: int} $metadata
+     * @param array{duration: float, width: int, height: int, codec: string} $metadata
      */
     private function processMedia(MediaAsset $asset, array $metadata, S3Service $s3): void
     {
         $targetW = (int) config('media.billboard_width', 3648);
         $targetH = (int) config('media.billboard_height', 1152);
 
-        $isPerfectSize = ($metadata['width'] === $targetW && $metadata['height'] === $targetH);
+        $w = $metadata['width'];
+        $h = $metadata['height'];
 
-        // If it's a non-video already at the perfect size, we can skip processing.
-        // For video, we ALWAYS want to re-encode to ensure web-optimization and MP4 container.
-        if ($isPerfectSize && $asset->file_type !== 'VIDEO') {
-            Log::info('AssetProcessingJob: image already at billboard size, skipping', [
-                'asset_id' => $asset->id,
-            ]);
-            return;
+        // Does this asset actually need an FFmpeg pass?
+        //   stretch on  → only if it isn't already exactly the billboard size
+        //   stretch off → only if it overflows the billboard bounds (needs a downscale)
+        $needsResize = $this->stretchToFit
+            ? ! ($w === $targetW && $h === $targetH)
+            : ($w > $targetW || $h > $targetH);
+
+        // The mobile app now compresses video to web-optimized H.264/MP4 before
+        // upload, so re-encoding here would be a redundant second compression.
+        // Skip whenever no resize is needed and the codec is already H.264
+        // (images: skip when they don't need a resize either). Anything else —
+        // a stretch, a downscale, or a non-H.264 codec (HEVC, etc.) — still needs
+        // the pass, since that's a genuine transform, not gratuitous re-encoding.
+        if (! $needsResize) {
+            $isVideo  = $asset->file_type === 'VIDEO';
+            $isH264   = $metadata['codec'] === 'h264';
+            if (! $isVideo || $isH264) {
+                Log::info('AssetProcessingJob: asset already optimized, skipping re-encode', [
+                    'asset_id'   => $asset->id,
+                    'file_type'  => $asset->file_type,
+                    'codec'      => $metadata['codec'],
+                    'dimensions' => "{$w}x{$h}",
+                ]);
+                return;
+            }
         }
 
         $ffmpeg = config('media.ffmpeg_binaries', '/usr/bin/ffmpeg');
@@ -211,7 +259,8 @@ class AssetProcessingJob implements ShouldQueue
     }
 
     /**
-     * Enforce the 8–15 second display window constraint from the spot economy spec.
+     * Enforce the 8–15 second display window for still media (photo/GIF), which
+     * has no intrinsic duration. Videos are exempt and keep their real length.
      */
     private function clampDuration(float $seconds): int
     {

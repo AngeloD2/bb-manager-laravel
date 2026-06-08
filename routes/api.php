@@ -84,7 +84,8 @@ Route::prefix('v1')->group(function () {
 
         // Assets
         Route::apiResource('assets', AssetController::class)->only(['index', 'store', 'update', 'destroy']);
-        Route::post('assets/upload', [AssetController::class, 'upload'])->name('assets.upload');
+        Route::post('assets/presign', [AssetController::class, 'presign'])->name('assets.presign');
+        Route::post('assets/confirm', [AssetController::class, 'confirm'])->name('assets.confirm');
 
         // Override Protocol (Play Next)
         Route::post('overrides', [OverrideController::class, 'store'])->name('overrides.store');

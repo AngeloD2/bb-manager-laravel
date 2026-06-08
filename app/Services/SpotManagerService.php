@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Device;
 use App\Models\MediaAsset;
 use App\Models\PlaybackLog;
+use App\Models\Setting;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -36,9 +37,12 @@ class SpotManagerService
         $rejected = 0;
         $errors   = [];
 
+        // Slot length is global; read once and charge each play by its footprint.
+        $secondsPerSpot = (int) (Setting::where('key', 'seconds_per_spot')->value('value') ?? 15);
+
         foreach ($entries as $entry) {
             try {
-                $result = $this->processEntry($device, $entry);
+                $result = $this->processEntry($device, $entry, $secondsPerSpot);
                 $result ? $accepted++ : $rejected++;
             } catch (\Throwable $e) {
                 $rejected++;
@@ -58,9 +62,9 @@ class SpotManagerService
      * Process a single log entry inside a pessimistic DB lock to prevent
      * race conditions when multiple boards report the same asset concurrently.
      */
-    private function processEntry(Device $device, array $entry): bool
+    private function processEntry(Device $device, array $entry, int $secondsPerSpot): bool
     {
-        return DB::transaction(function () use ($device, $entry): bool {
+        return DB::transaction(function () use ($device, $entry, $secondsPerSpot): bool {
             /** @var MediaAsset|null $asset */
             $asset = MediaAsset::lockForUpdate()->find($entry['asset_id']);
 
@@ -84,7 +88,8 @@ class SpotManagerService
                 'asset_id'    => $asset->id,
                 'loop_id'     => $asset->loop_id,
                 'device_id'   => $device->id,
-                'spot_spent'  => 1,
+                // Charge the loop/board budget by airtime: a long clip spends several slots.
+                'spot_spent'  => $asset->spotFootprint($secondsPerSpot),
                 'was_override' => $entry['was_override'] ?? false,
                 'played_at'   => $entry['played_at'],
             ]);

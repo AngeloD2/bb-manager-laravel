@@ -29,8 +29,14 @@ class ConstraintValidationService
      *
      * @return string  One of the class constants above.
      */
-    public function validate(MediaAsset $asset, ?string $previousAssetId = null, ?\Carbon\Carbon $now = null): string
-    {
+    public function validate(
+        MediaAsset $asset,
+        ?string $previousAssetId = null,
+        ?\Carbon\Carbon $now = null,
+        int $projectedHourly = 0,
+        int $projectedDaily = 0,
+        int $projectedLoopDaily = 0
+    ): string {
         $now ??= now();
 
         // 0. Campaign flight period gate (skip before start or after end date)
@@ -48,16 +54,22 @@ class ConstraintValidationService
             return self::NO_TOKENS;
         }
 
+        // The $projected* counts represent spots already scheduled for this asset
+        // (and its loop) earlier in the SAME queue-generation batch. They are added
+        // to the persisted play counts so per-hour / per-day / loop caps are honored
+        // as the queue is built — without them, a single batch would schedule a
+        // capped asset far beyond its limit and the fallback loop would never run.
+
         // 2. Micro: max plays per hour
         if ($asset->max_plays_per_hour !== null) {
-            if ($asset->playsLastHour() >= $asset->max_plays_per_hour) {
+            if ($asset->playsLastHour() + $projectedHourly >= $asset->max_plays_per_hour) {
                 return self::HOURLY_EXCEEDED;
             }
         }
 
         // 3. Micro: max plays per day
         if ($asset->max_daily_plays !== null) {
-            if ($asset->playsToday() >= $asset->max_daily_plays) {
+            if ($asset->playsToday() + $projectedDaily >= $asset->max_daily_plays) {
                 return self::DAILY_EXCEEDED;
             }
         }
@@ -65,7 +77,8 @@ class ConstraintValidationService
         // 4. Macro: loop daily spot cap
         if ($asset->loop_id !== null) {
             $loop = $asset->loop ?? MediaLoop::find($asset->loop_id);
-            if ($loop?->isDailyCapped()) {
+            if ($loop && $loop->max_daily_spots !== null
+                && ($loop->spotsSpentToday() + $projectedLoopDaily) >= $loop->max_daily_spots) {
                 return self::FOLDER_DAILY_EXCEEDED;
             }
         }

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Device;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
+use App\Models\Setting;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -62,6 +63,17 @@ class QueueGenerationService
         $cacheKey = "device:{$device->id}:queue";
         $queue = Cache::get($cacheKey, []);
 
+        // Slot length is global; loop caps are charged by airtime (a long clip
+        // spends several slots), so loop-daily tallies add the asset's footprint.
+        $secondsPerSpot = (int) (Setting::where('key', 'seconds_per_spot')->value('value') ?? 15);
+
+        // Running tallies of spots already scheduled in the queue we are rebuilding,
+        // so per-hour / per-day / loop caps are enforced across the WHOLE visible
+        // queue (retained items + freshly generated ones), not just past plays.
+        $projHourly = [];    // asset_id => play count scheduled this batch
+        $projDaily = [];     // asset_id => play count scheduled this batch
+        $projLoopDaily = []; // loop_id  => slot footprint scheduled this batch
+
         $validQueue = [];
         $previousAssetId = null;
         foreach ($queue as $item) {
@@ -71,9 +83,21 @@ class QueueGenerationService
                 continue;
             }
             $asset = MediaAsset::with('conflicts')->find($item['asset_id']);
-            if ($asset && $this->constraintValidator->isEligible($asset, $previousAssetId)) {
+            if (!$asset) {
+                continue;
+            }
+            $ph = $projHourly[$asset->id] ?? 0;
+            $pd = $projDaily[$asset->id] ?? 0;
+            $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
+            if ($this->constraintValidator->validate($asset, $previousAssetId, null, $ph, $pd, $pl)
+                === ConstraintValidationService::VALID) {
                 $validQueue[] = $item;
                 $previousAssetId = $item['asset_id'];
+                $projHourly[$asset->id] = $ph + 1;
+                $projDaily[$asset->id] = $pd + 1;
+                if ($asset->loop_id) {
+                    $projLoopDaily[$asset->loop_id] = $pl + $asset->spotFootprint($secondsPerSpot);
+                }
             }
         }
         $queue = $validQueue;
@@ -88,7 +112,10 @@ class QueueGenerationService
                     ->value('asset_id');
             }
 
-            $newItems = $this->generateNextSequence($device, $itemsToGenerate, $previousAssetId);
+            $newItems = $this->generateNextSequence(
+                $device, $itemsToGenerate, $previousAssetId,
+                $projHourly, $projDaily, $projLoopDaily, $secondsPerSpot
+            );
             $queue = array_merge($queue, $newItems);
             $this->saveQueue($device, $queue);
         }
@@ -120,8 +147,15 @@ class QueueGenerationService
         Cache::put($cacheKey, $queue, now()->addDays(1));
     }
 
-    private function generateNextSequence(Device $device, int $count, ?string $previousAssetId = null): array
-    {
+    private function generateNextSequence(
+        Device $device,
+        int $count,
+        ?string $previousAssetId = null,
+        array $projHourly = [],
+        array $projDaily = [],
+        array $projLoopDaily = [],
+        int $secondsPerSpot = 15
+    ): array {
         $primaryLoops = MediaLoop::where('is_fallback', false)
             ->with(['assets' => function($q) {
                 $q->where('is_synced', true)
@@ -184,20 +218,20 @@ class QueueGenerationService
                 while ($attempts < $masterPrimaryAssets->count()) {
                     $currentIndex = ($currentIndex + 1) % $masterPrimaryAssets->count();
                     $candidate = $masterPrimaryAssets[$currentIndex];
-                    if ($this->constraintValidator->isEligible($candidate, $previousAssetId)) {
+                    if ($this->isEligibleProjected($candidate, $previousAssetId, $projHourly, $projDaily, $projLoopDaily)) {
                         $selected = $candidate;
                         break;
                     }
                     $attempts++;
                 }
             }
-            
+
             if (!$selected && $masterFallbackAssets->isNotEmpty()) {
                 $attempts = 0;
                 while ($attempts < $masterFallbackAssets->count()) {
                     $fallbackIndex = ($fallbackIndex + 1) % $masterFallbackAssets->count();
                     $candidate = $masterFallbackAssets[$fallbackIndex];
-                    if ($this->constraintValidator->isEligible($candidate, $previousAssetId)) {
+                    if ($this->isEligibleProjected($candidate, $previousAssetId, $projHourly, $projDaily, $projLoopDaily)) {
                         $selected = $candidate;
                         break;
                     }
@@ -206,7 +240,9 @@ class QueueGenerationService
             }
 
             if (!$selected) {
-                $anyWithSpots = MediaAsset::where('play_spots_remaining', '>', 0)->get();
+                $anyWithSpots = MediaAsset::where('play_spots_remaining', '>', 0)
+                    ->get()
+                    ->filter(fn($a) => $this->isAssignedToDevice($a, $device));
                 if ($anyWithSpots->isNotEmpty()) {
                     $selected = $anyWithSpots->random();
                 }
@@ -214,6 +250,14 @@ class QueueGenerationService
 
             if ($selected) {
                 $previousAssetId = $selected->id;
+                // Tally this scheduled spot so the next iteration sees the consumed
+                // hourly/daily/loop budget and yields to the fallback once capped.
+                $projHourly[$selected->id] = ($projHourly[$selected->id] ?? 0) + 1;
+                $projDaily[$selected->id] = ($projDaily[$selected->id] ?? 0) + 1;
+                if ($selected->loop_id) {
+                    $projLoopDaily[$selected->loop_id] = ($projLoopDaily[$selected->loop_id] ?? 0)
+                        + $selected->spotFootprint($secondsPerSpot);
+                }
                 $generated[] = [
                     'id' => (string) Str::uuid(),
                     'asset_id' => $selected->id,
@@ -227,6 +271,26 @@ class QueueGenerationService
         }
 
         return $generated;
+    }
+
+    /**
+     * Eligibility check that folds in spots already scheduled earlier in the same
+     * batch (keyed by asset id and loop id), so per-hour/day/loop caps are honored
+     * as the queue is generated rather than only against persisted playback logs.
+     */
+    private function isEligibleProjected(
+        MediaAsset $asset,
+        ?string $previousAssetId,
+        array $projHourly,
+        array $projDaily,
+        array $projLoopDaily
+    ): bool {
+        $ph = $projHourly[$asset->id] ?? 0;
+        $pd = $projDaily[$asset->id] ?? 0;
+        $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
+
+        return $this->constraintValidator->validate($asset, $previousAssetId, null, $ph, $pd, $pl)
+            === ConstraintValidationService::VALID;
     }
 
     private function isAssignedToDevice(MediaAsset $asset, Device $device): bool

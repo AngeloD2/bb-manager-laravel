@@ -43,8 +43,9 @@ class DeviceController extends Controller
                 $durationSecs = $start->diffInSeconds($end);
                 $totalSpots = (int) floor($durationSecs / $secondsPerSpot);
 
-                // calculate open spots
-                $playedSpots = $d->playbackLogs()->whereBetween('played_at', [$start, $end])->count();
+                // calculate open spots — sum slot footprints so a long clip counts
+                // as the multiple slots it actually occupies, matching total_spots.
+                $playedSpots = (int) $d->playbackLogs()->whereBetween('played_at', [$start, $end])->sum('spot_spent');
                 $openSpots = max(0, $totalSpots - $playedSpots);
             }
 

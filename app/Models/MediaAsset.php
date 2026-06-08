@@ -155,6 +155,19 @@ class MediaAsset extends Model
         return $this->loop?->is_fallback ?? false;
     }
 
+    /**
+     * How many board slots this asset occupies at the given spot length.
+     * A 60s clip at 15s/spot fills 4 slots; still media fills 1. Used to charge
+     * loop daily caps and board inventory by airtime rather than a flat 1/play.
+     */
+    public function spotFootprint(int $secondsPerSpot): int
+    {
+        if ($secondsPerSpot <= 0) {
+            return 1;
+        }
+        return max(1, (int) ceil(((int) $this->duration_secs) / $secondsPerSpot));
+    }
+
     /** Deduct spots; clamp at zero. */
     public function deductSpot(): void
     {

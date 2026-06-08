@@ -169,17 +169,19 @@ class SyncController extends Controller
     private function deviceCanAccessAsset(\App\Models\Device $device, \App\Models\MediaAsset $asset): bool
     {
         if ($asset->is_global) return true;
+        if ($asset->loop && $asset->loop->is_global) return true;
 
-        if (!empty($asset->assigned_devices) && in_array($device->id, $asset->assigned_devices)) {
-            return true;
+        $hasAssetAssignment = !empty($asset->assigned_devices);
+        $hasLoopAssignment = $asset->loop && !empty($asset->loop->assigned_devices);
+
+        if ($hasAssetAssignment && in_array($device->id, $asset->assigned_devices)) return true;
+        if ($hasLoopAssignment && in_array($device->id, $asset->loop->assigned_devices)) return true;
+
+        if ($hasAssetAssignment || $hasLoopAssignment) {
+            return false;
         }
 
-        $loop = $asset->loop;
-        if (!$loop) return false;
-
-        if ($loop->is_global) return true;
-
-        return !empty($loop->assigned_devices) && in_array($device->id, $loop->assigned_devices);
+        return true;
     }
 
     /**

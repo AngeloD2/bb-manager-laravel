@@ -56,6 +56,23 @@ class S3Service
     }
 
     /**
+     * Generate a presigned PUT URL for direct-to-S3 client uploads.
+     */
+    public function presignedPutUrl(string $key, string $contentType, int $ttlSeconds = 900): string
+    {
+        $cmd = $this->client->getCommand('PutObject', [
+            'Bucket'      => $this->bucket,
+            'Key'         => $key,
+            'ContentType' => $contentType,
+        ]);
+
+        return (string) $this->client->createPresignedRequest(
+            $cmd,
+            "+{$ttlSeconds} seconds"
+        )->getUri();
+    }
+
+    /**
      * Delete an object from S3 (called when an asset is deleted from admin).
      */
     public function deleteObject(string $objectKey): void
@@ -64,6 +81,29 @@ class S3Service
             'Bucket' => $this->bucket,
             'Key'    => $objectKey,
         ]);
+    }
+
+    /**
+     * Retrieve metadata for an object to verify existence and capture size.
+     */
+    public function headObject(string $key): ?array
+    {
+        try {
+            $result = $this->client->headObject([
+                'Bucket' => $this->bucket,
+                'Key'    => $key,
+            ]);
+
+            return [
+                'size'        => $result['ContentLength'] ?? null,
+                'contentType' => $result['ContentType'] ?? null,
+            ];
+        } catch (\Aws\S3\Exception\S3Exception $e) {
+            if ($e->getStatusCode() === 404) {
+                return null;
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -84,26 +124,6 @@ class S3Service
             $slug,
             strtolower($ext)
         );
-    }
-
-    /**
-     * Upload a file directly to S3.
-     */
-    public function upload(string $objectKey, \Illuminate\Http\UploadedFile $file): void
-    {
-        $params = [
-            'Bucket'               => $this->bucket,
-            'Key'                  => $objectKey,
-            'SourceFile'           => $file->getRealPath(),
-            'ContentType'          => $file->getMimeType(),
-            'ServerSideEncryption' => 'aws:kms',
-        ];
-
-        if ($this->kmsKeyId) {
-            $params['SSEKMSKeyId'] = $this->kmsKeyId;
-        }
-
-        $this->client->putObject($params);
     }
 
     /**
