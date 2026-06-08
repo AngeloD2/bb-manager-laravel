@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Models\MediaAsset;
-use App\Services\S3Service;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -41,7 +40,7 @@ class AssetProcessingJob implements ShouldQueue
         private readonly bool $stretchToFit = false
     ) {}
 
-    public function handle(S3Service $s3): void
+    public function handle(): void
     {
         $asset = MediaAsset::findOrFail($this->assetId);
 
@@ -52,15 +51,14 @@ class AssetProcessingJob implements ShouldQueue
 
         try {
             if (!$asset->size_bytes) {
-                $meta = $s3->headObject($asset->file_path);
-                if ($meta && isset($meta['size'])) {
-                    $asset->size_bytes = $meta['size'];
+                if (Storage::disk('s3')->exists($asset->file_path)) {
+                    $asset->size_bytes = Storage::disk('s3')->size($asset->file_path);
                 }
             }
 
             $metadata = $this->extractMetadata($asset);
 
-            $this->processMedia($asset, $metadata, $s3);
+            $this->processMedia($asset, $metadata);
 
             $probedDuration = $metadata['duration'] ?? $asset->duration_secs;
 
@@ -145,7 +143,7 @@ class AssetProcessingJob implements ShouldQueue
      *
      * @param array{duration: float, width: int, height: int, codec: string} $metadata
      */
-    private function processMedia(MediaAsset $asset, array $metadata, S3Service $s3): void
+    private function processMedia(MediaAsset $asset, array $metadata): void
     {
         $targetW = (int) config('media.billboard_width', 3648);
         $targetH = (int) config('media.billboard_height', 1152);
@@ -237,7 +235,7 @@ class AssetProcessingJob implements ShouldQueue
             $dir = $pathParts['dirname'] === '.' ? '' : $pathParts['dirname'] . '/';
             $newPath = $dir . $pathParts['filename'] . '.' . $ext;
 
-            $s3->uploadPath($newPath, $outPath, $contentType);
+            Storage::disk('s3')->putFileAs('', new \Illuminate\Http\File($outPath), $newPath);
             
             if ($oldPath !== $newPath) {
                 Storage::disk('s3')->delete($oldPath);

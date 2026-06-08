@@ -4,7 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\MediaAsset;
 use App\Services\DeviceNotifier;
-use App\Services\S3Service;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -22,7 +22,7 @@ class CleanupFailedAssets extends Command
 
     protected $description = 'Delete media assets whose optimization/conversion failed (S3 object + record).';
 
-    public function handle(S3Service $s3, DeviceNotifier $notifier): int
+    public function handle(DeviceNotifier $notifier): int
     {
         $failed = MediaAsset::whereNotNull('sync_error')
             ->where('is_synced', false)
@@ -37,7 +37,7 @@ class CleanupFailedAssets extends Command
             // Attempt S3 cleanup; log failures but still drop the record.
             try {
                 if ($asset->file_path) {
-                    $s3->deleteObject($asset->file_path);
+                    Storage::disk('s3')->delete($asset->file_path);
                 }
             } catch (\Throwable $e) {
                 Log::warning('CleanupFailedAssets: S3 delete failed', [

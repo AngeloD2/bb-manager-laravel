@@ -7,8 +7,9 @@ use App\Http\Resources\Api\V1\MediaAssetResource;
 use App\Jobs\AssetProcessingJob;
 use App\Models\MediaAsset;
 use App\Services\DeviceNotifier;
-use App\Services\S3Service;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -26,7 +27,6 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 class AssetController extends Controller
 {
     public function __construct(
-        private readonly S3Service $s3,
         private readonly DeviceNotifier $notifier
     ) {}
 
@@ -137,7 +137,7 @@ class AssetController extends Controller
     {
         // Attempt S3 cleanup; log failures but don't block the response.
         try {
-            $this->s3->deleteObject($asset->file_path);
+            Storage::disk('s3')->delete($asset->file_path);
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('AssetController: S3 delete failed', [
                 'asset_id'  => $asset->id,
@@ -168,10 +168,16 @@ class AssetController extends Controller
             'size_bytes'    => ['required', 'integer', 'max:5368709120'], // 5GB limit
         ]);
 
-        $objectKey = $this->s3->buildObjectKey($request->original_name);
+        $objectKey = $this->buildObjectKey($request->original_name);
         $expiresIn = 900; // 15 minutes
 
-        $uploadUrl = $this->s3->presignedPutUrl($objectKey, $request->content_type, $expiresIn);
+        $uploadData = Storage::disk('s3')->temporaryUploadUrl(
+            $objectKey, 
+            now()->addSeconds($expiresIn),
+            ['ContentType' => $request->content_type]
+        );
+
+        $uploadUrl = is_array($uploadData) ? $uploadData['url'] : $uploadData;
 
         return response()->json([
             'object_key' => $objectKey,
@@ -207,13 +213,13 @@ class AssetController extends Controller
             'stretch_to_fit'        => ['nullable'],
         ]);
 
-        $meta = $this->s3->headObject($request->object_key);
-        if (!$meta) {
+        if (!Storage::disk('s3')->exists($request->object_key)) {
             return response()->json(['message' => 'File not found in S3.'], 400);
         }
+        $size = Storage::disk('s3')->size($request->object_key);
 
-        if ($meta['size'] > 5368709120) {
-            $this->s3->deleteObject($request->object_key);
+        if ($size > 5368709120) {
+            Storage::disk('s3')->delete($request->object_key);
             return response()->json(['message' => 'File exceeds 5GB limit.'], 400);
         }
 
@@ -232,7 +238,7 @@ class AssetController extends Controller
             'file_path'             => $request->object_key,
             'file_type'             => $request->file_type,
             'loop_id'               => $request->loop_id,
-            'size_bytes'            => $meta['size'],
+            'size_bytes'            => $size,
             'duration_secs'         => $request->duration_secs ?? 10,
             'geo_campaign'          => $request->geo_campaign,
             'campaign_name'         => $request->campaign_name,
@@ -262,5 +268,24 @@ class AssetController extends Controller
         $this->notifier->notifyScheduleChanged();
 
         return response()->json(new MediaAssetResource($asset->load(['loop', 'conflicts'])), 201);
+    }
+
+    /**
+     * Build a deterministic, human-readable S3 key for a new asset.
+     */
+    private function buildObjectKey(string $filename): string
+    {
+        $ext  = pathinfo($filename, PATHINFO_EXTENSION);
+        $slug = Str::slug(pathinfo($filename, PATHINFO_FILENAME));
+        $uuid = Str::uuid();
+
+        return sprintf(
+            'media/%s/%s/%s-%s.%s',
+            now()->format('Y'),
+            now()->format('m'),
+            $uuid,
+            $slug,
+            strtolower($ext)
+        );
     }
 }
