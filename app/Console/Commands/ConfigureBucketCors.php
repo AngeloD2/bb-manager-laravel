@@ -34,7 +34,7 @@ class ConfigureBucketCors extends Command
                     'CORSRules' => [
                         [
                             'AllowedHeaders' => ['*'],
-                            'AllowedMethods' => ['GET', 'OPTIONS', 'HEAD'],
+                            'AllowedMethods' => ['GET', 'HEAD', 'PUT', 'POST', 'DELETE'],
                             'AllowedOrigins' => ['http://localhost:5173'],
                             'MaxAgeSeconds'  => 3600,
                         ],
