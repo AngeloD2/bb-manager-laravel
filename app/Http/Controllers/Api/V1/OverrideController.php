@@ -52,6 +52,7 @@ class OverrideController extends Controller
         if (config('broadcasting.default') === 'reverb') {
             try {
                 broadcast(new \App\Events\DeviceCommand($device, 'override', [
+                    'override_id'   => $override->id,
                     'asset_id'      => $asset->id,
                     'asset_name'    => $asset->name,
                     'file_type'     => $asset->file_type,

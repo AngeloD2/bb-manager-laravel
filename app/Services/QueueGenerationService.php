@@ -110,14 +110,10 @@ class QueueGenerationService
             return !($item['is_override'] ?? false);
         }));
 
-        // Insert at position 1 — after the currently-playing item (index 0) —
-        // so the device finishes the current asset before jumping to the override.
-        // array_unshift would put it at index 0, immediately cutting off playback.
-        if (empty($queue)) {
-            $queue = [$overrideItem];
-        } else {
-            array_splice($queue, 1, 0, [$overrideItem]);
-        }
+        // Insert at position 0 — the React player will immediately interrupt
+        // current playback to play this override. Putting it at index 0 ensures
+        // the timeline correctly reflects it as "Now Playing".
+        array_unshift($queue, $overrideItem);
 
         $this->saveQueue($device, $queue);
     }
