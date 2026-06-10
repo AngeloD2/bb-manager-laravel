@@ -46,7 +46,14 @@ class OverrideController extends Controller
         // Broadcast via Reverb if configured (non-blocking)
         if (config('broadcasting.default') === 'reverb') {
             try {
-                broadcast(new \App\Events\DeviceCommand($device, 'override', ['asset_id' => $asset->id]));
+                broadcast(new \App\Events\DeviceCommand($device, 'override', [
+                    'asset_id'      => $asset->id,
+                    'asset_name'    => $asset->name,
+                    'file_type'     => $asset->file_type,
+                    'duration_secs' => $asset->duration_secs,
+                    'loop_id'       => $asset->loop_id,
+                    'download_url'  => $asset->deliveryUrl(),
+                ]));
             } catch (\Throwable) {
                 // WebSocket broadcast failed — polling fallback will handle it.
             }
