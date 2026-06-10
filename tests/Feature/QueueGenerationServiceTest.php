@@ -73,4 +73,37 @@ class QueueGenerationServiceTest extends TestCase
         $this->assertSame(1, array_count_values($names)['p1'], 'pacing keeps p1 to a single play in the batch');
         $this->assertSame('f1', $names[1], 'the paced gap is filled by the fallback loop');
     }
+
+    /** @test */
+    public function it_cancels_and_removes_injected_override(): void
+    {
+        $loop = MediaLoop::create(['name' => 'P', 'is_fallback' => false, 'is_global' => true]);
+        $asset = $this->asset('p1', $loop, 0);
+        $overrideAsset = $this->asset('o1', $loop, 1);
+
+        $device = Device::create([
+            'name' => 'Board', 'loop_orders' => [$loop->id],
+        ]);
+
+        $service = app(QueueGenerationService::class);
+
+        // Get initial queue
+        $service->getUpcomingQueue($device, 4);
+        
+        // Inject override
+        $service->injectOverride($device, $overrideAsset);
+
+        // Retrieve queue and assert override is present
+        $queueAfterInject = $service->getUpcomingQueue($device, 4);
+        $overrideCount = count(array_filter($queueAfterInject, fn ($i) => $i['is_override'] ?? false));
+        $this->assertEquals(1, $overrideCount);
+
+        // Cancel override
+        $service->cancelOverride($device);
+
+        // Retrieve queue and assert override is removed
+        $queueAfterCancel = $service->getUpcomingQueue($device, 4);
+        $overrideCountAfter = count(array_filter($queueAfterCancel, fn ($i) => $i['is_override'] ?? false));
+        $this->assertEquals(0, $overrideCountAfter);
+    }
 }

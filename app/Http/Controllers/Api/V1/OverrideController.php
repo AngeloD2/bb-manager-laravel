@@ -93,6 +93,9 @@ class OverrideController extends Controller
 
         $override->delete();
 
+        // Remove the override from the server's generated timeline queue
+        app(\App\Services\QueueGenerationService::class)->cancelOverride($device);
+
         // Broadcast the cancellation so connected players can clear their queue
         if (config('broadcasting.default') === 'reverb') {
             try {

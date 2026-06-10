@@ -117,6 +117,22 @@ class QueueGenerationService
         $this->saveQueue($device, $queue);
     }
 
+    public function cancelOverride(Device $device): void
+    {
+        $cacheKey = "device:{$device->id}:queue";
+        $queue = Cache::get($cacheKey, []);
+
+        if (empty($queue)) {
+            return;
+        }
+
+        $updatedQueue = array_values(array_filter($queue, function ($item) {
+            return !($item['is_override'] ?? false);
+        }));
+
+        $this->saveQueue($device, $updatedQueue);
+    }
+
     private function saveQueue(Device $device, array $queue): void
     {
         $cacheKey = "device:{$device->id}:queue";
