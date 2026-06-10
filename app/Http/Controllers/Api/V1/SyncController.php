@@ -54,9 +54,30 @@ class SyncController extends Controller
                     'id'       => $o->id,
                     'asset'    => new MediaAssetResource($o->asset),
                 ]),
+                'schedule'        => $payload['schedule'],
+                'quota'           => $payload['quota'],
                 'broadcasting'    => $payload['broadcasting'],
                 'synced_at' => $payload['synced_at'],
             ],
+        ]);
+    }
+
+    /**
+     * GET /api/v1/sync/ping
+     *
+     * Lightweight reachability probe. The device polls this to decide whether it
+     * can flush its local log queue; `server_time` lets it correct clock skew on
+     * locally-stamped played_at values. Also refreshes the device heartbeat.
+     */
+    public function ping(Request $request): JsonResponse
+    {
+        /** @var \App\Models\Device $device */
+        $device = $request->user();
+        $device->heartbeat();
+
+        return response()->json([
+            'ok'          => true,
+            'server_time' => now()->toIso8601String(),
         ]);
     }
 
@@ -71,10 +92,11 @@ class SyncController extends Controller
     public function storeLogs(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'logs'                  => ['required', 'array', 'min:1', 'max:500'],
-            'logs.*.asset_id'       => ['required', 'uuid', 'exists:media_assets,id'],
-            'logs.*.played_at'      => ['required', 'date'],
-            'logs.*.was_override'   => ['sometimes', 'boolean'],
+            'logs'                      => ['required', 'array', 'min:1', 'max:500'],
+            'logs.*.asset_id'           => ['required', 'uuid', 'exists:media_assets,id'],
+            'logs.*.client_event_id'    => ['required', 'uuid'],
+            'logs.*.played_at'          => ['required', 'date'],
+            'logs.*.was_override'       => ['sometimes', 'boolean'],
         ]);
 
         if ($validator->fails()) {
@@ -87,7 +109,9 @@ class SyncController extends Controller
         $result = $this->tokenManager->processBatch($device, $request->input('logs'));
 
         return response()->json([
-            'data'    => $result,
+            'data'    => array_merge($result, [
+                'device_state' => $this->syncService->deviceSpotState($device),
+            ]),
             'message' => "Batch processed: {$result['accepted']} accepted, {$result['rejected']} rejected.",
         ], 200);
     }
@@ -201,37 +225,6 @@ class SyncController extends Controller
                 'expires_in'  => 3600,
             ],
         ]);
-    }
-
-    /**
-     * GET /api/v1/device/next
-     *
-     * Returns the single next media asset for the device to play.
-     */
-    public function nextAsset(Request $request, \App\Services\QueueGenerationService $queueService): JsonResponse
-    {
-        /** @var \App\Models\Device $device */
-        $device = $request->user();
-
-        if (!$device->is_online) {
-            return response()->json(['data' => null]);
-        }
-
-        $device->heartbeat();
-
-        $next = $queueService->popNextAsset($device);
-
-        if (!$next) {
-            return response()->json(['data' => null]);
-        }
-
-        // Add download URL
-        $asset = \App\Models\MediaAsset::find($next['asset_id']);
-        if ($asset) {
-            $next['download_url'] = route('sync.asset-serve', ['assetId' => $asset->id]);
-        }
-
-        return response()->json(['data' => $next]);
     }
 
     /**

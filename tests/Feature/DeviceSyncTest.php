@@ -214,6 +214,45 @@ class DeviceSyncTest extends TestCase
             ->assertJsonPath('data.eligible_assets.0.loop_id', $myLoop->id);
     }
 
+    // ── Pre-baked schedule + quota (decoupled-brain payload) ──────────────────
+
+    /** @test */
+    public function sync_includes_prebaked_schedule_and_quota(): void
+    {
+        $this->actAsDevice();
+
+        $loop  = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'is_global' => true, 'max_daily_spots' => 50]);
+        $asset = MediaAsset::create([
+            'name' => 'Nike Ad', 'file_path' => 'media/nike.mp4', 'file_type' => 'VIDEO',
+            'loop_id' => $loop->id, 'order_index' => 0, 'size_bytes' => 1000, 'duration_secs' => 10,
+            'is_synced' => true, 'play_spots_remaining' => 50, 'max_daily_plays' => 20,
+        ]);
+
+        $res = $this->getJson('/api/v1/sync')
+            ->assertOk()
+            ->assertJsonStructure([
+                'data' => [
+                    'schedule' => ['primary', 'fallback'],
+                    'quota'    => ['as_of', 'seconds_per_spot', 'device', 'assets', 'loops'],
+                ],
+            ]);
+
+        $res->assertJsonPath('data.schedule.primary.0.asset_id', $asset->id);
+        $res->assertJsonPath('data.quota.assets.' . $asset->id . '.play_spots_remaining', 50);
+        $res->assertJsonPath('data.quota.loops.' . $loop->id . '.max_daily_spots', 50);
+    }
+
+    /** @test */
+    public function ping_returns_ok_and_server_time(): void
+    {
+        $this->actAsDevice();
+
+        $this->getJson('/api/v1/sync/ping')
+            ->assertOk()
+            ->assertJsonStructure(['ok', 'server_time'])
+            ->assertJsonPath('ok', true);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function actAsDevice(): void

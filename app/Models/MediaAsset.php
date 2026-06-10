@@ -112,6 +112,18 @@ class MediaAsset extends Model
             ->count();
     }
 
+    /**
+     * Server-stamped timestamp of the most recent play, or null if never played.
+     * Devices use this to space out plays (pacing) after a cold sync, when they
+     * only have the snapshot and not their own local play history yet.
+     */
+    public function lastPlayedAt(): ?string
+    {
+        $playedAt = $this->playbackLogs()->max('played_at');
+
+        return $playedAt ? \Carbon\Carbon::parse($playedAt)->toIso8601String() : null;
+    }
+
     /** True when today falls within the optional campaign flight window. */
     public function isWithinCampaignPeriod(\Carbon\Carbon $date): bool
     {
