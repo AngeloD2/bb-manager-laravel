@@ -105,7 +105,15 @@ class QueueGenerationService
             'loop_id' => $asset->loop_id,
         ];
 
-        array_unshift($queue, $overrideItem);
+        // Insert at position 1 — after the currently-playing item (index 0) —
+        // so the device finishes the current asset before jumping to the override.
+        // array_unshift would put it at index 0, immediately cutting off playback.
+        if (empty($queue)) {
+            $queue = [$overrideItem];
+        } else {
+            array_splice($queue, 1, 0, [$overrideItem]);
+        }
+
         $this->saveQueue($device, $queue);
     }
 
