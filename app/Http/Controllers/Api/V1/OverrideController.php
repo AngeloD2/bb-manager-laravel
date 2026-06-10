@@ -33,6 +33,11 @@ class OverrideController extends Controller
         $asset  = MediaAsset::findOrFail($data['asset_id']);
         $device = Device::findOrFail($data['device_id']);
 
+        // Delete any existing unconsumed overrides for this device so only one is active at a time
+        TimelineOverride::where('device_id', $device->id)
+            ->where('consumed', false)
+            ->delete();
+
         // Create the override command record
         $override = TimelineOverride::create([
             'asset_id'  => $asset->id,
@@ -75,7 +80,7 @@ class OverrideController extends Controller
      * DELETE /api/v1/admin/overrides
      * Query param: device_id (required)
      *
-     * Cancels the most recent unconsumed override queued for the given device.
+     * Cancels all pending unconsumed overrides queued for the given device.
      * Returns 200 whether or not an override was pending (idempotent).
      */
     public function destroy(Request $request): JsonResponse
@@ -86,14 +91,10 @@ class OverrideController extends Controller
 
         $device = Device::findOrFail($data['device_id']);
 
-        $override = TimelineOverride::where('device_id', $device->id)
+        // Delete all unconsumed overrides to ensure the queue is completely clean
+        TimelineOverride::where('device_id', $device->id)
             ->where('consumed', false)
-            ->latest()
-            ->first();
-
-        if ($override) {
-            $override->delete();
-        }
+            ->delete();
 
         // Always remove the override from the server's generated timeline queue,
         // even if it was marked as consumed (since it might still be sitting in the cache)
