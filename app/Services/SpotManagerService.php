@@ -143,6 +143,10 @@ class SpotManagerService
                 throw new DuplicateEventException();
             }
 
+            // Remove the played asset from the server's generated timeline queue
+            app(\App\Services\QueueGenerationService::class)
+                ->consumePlayedAsset($device, $asset->id, $entry['was_override'] ?? false);
+
             return 'new';
         });
     }

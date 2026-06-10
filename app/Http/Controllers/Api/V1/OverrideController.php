@@ -91,19 +91,16 @@ class OverrideController extends Controller
             ->latest()
             ->first();
 
-        if (!$override) {
-            return response()->json([
-                'message'   => 'No pending override found for this device.',
-                'cancelled' => false,
-            ]);
+        if ($override) {
+            $override->delete();
         }
 
-        $override->delete();
-
-        // Remove the override from the server's generated timeline queue
+        // Always remove the override from the server's generated timeline queue,
+        // even if it was marked as consumed (since it might still be sitting in the cache)
         app(\App\Services\QueueGenerationService::class)->cancelOverride($device);
 
-        // Broadcast the cancellation so connected players can clear their queue
+        // Broadcast the cancellation so connected players can clear their queue,
+        // even if it was marked as consumed on the server, the player might still have it queued.
         if (config('broadcasting.default') === 'reverb') {
             try {
                 broadcast(new \App\Events\DeviceCommand($device, 'override_cancelled', []));
@@ -113,7 +110,7 @@ class OverrideController extends Controller
         }
 
         return response()->json([
-            'message'   => "Override cancelled for device \"{$device->name}\".",
+            'message'   => 'Pending override cancelled.',
             'cancelled' => true,
         ]);
     }

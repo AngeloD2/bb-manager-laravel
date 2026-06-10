@@ -139,6 +139,40 @@ class QueueGenerationService
         Cache::put($cacheKey, $queue, now()->addDays(1));
     }
 
+    /**
+     * Called when the device reports an asset as played.
+     * Removes the asset from the front of the cached timeline queue so it doesn't pile up.
+     */
+    public function consumePlayedAsset(Device $device, string $assetId, bool $wasOverride = false): void
+    {
+        $cacheKey = "device:{$device->id}:queue";
+        $queue = Cache::get($cacheKey, []);
+
+        if (empty($queue)) {
+            return;
+        }
+
+        // Look for the first matching item in the queue (usually at the very top).
+        // Remove it and re-save the queue.
+        foreach ($queue as $index => $item) {
+            if ($item['asset_id'] === $assetId && ($item['is_override'] ?? false) === $wasOverride) {
+                array_splice($queue, $index, 1);
+                $this->saveQueue($device, $queue);
+                return;
+            }
+        }
+        
+        // Fallback: If we didn't find an exact match including wasOverride, 
+        // just match the asset_id (in case of override flag mismatch).
+        foreach ($queue as $index => $item) {
+            if ($item['asset_id'] === $assetId) {
+                array_splice($queue, $index, 1);
+                $this->saveQueue($device, $queue);
+                return;
+            }
+        }
+    }
+
     private function generateNextSequence(
         Device $device,
         int $count,
