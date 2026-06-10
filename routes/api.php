@@ -91,6 +91,7 @@ Route::prefix('v1')->group(function () {
 
         // Override Protocol (Play Next)
         Route::post('overrides', [OverrideController::class, 'store'])->name('overrides.store');
+        Route::delete('overrides', [OverrideController::class, 'destroy'])->name('overrides.destroy');
 
         // Secure Vault links (admin management)
         Route::get('vault/links',         [VaultController::class, 'index'])->name('vault.links.index');

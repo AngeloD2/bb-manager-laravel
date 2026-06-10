@@ -111,8 +111,11 @@ class SpotManagerService
                 throw new \RuntimeException('Asset not found.');
             }
 
-            // Skip constraint validation for fallback assets (unlimited filler).
-            if (! $asset->isFallback()) {
+            // Override plays bypass all scheduling constraints (hourly/daily limits,
+            // spot economy) by design — the operator explicitly demanded this play.
+            // Fallback assets are also uncapped (unlimited filler).
+            $isOverride = !empty($entry['was_override']);
+            if (! $isOverride && ! $asset->isFallback()) {
                 $status = $this->constraintValidator->validate($asset);
 
                 if ($status !== ConstraintValidationService::VALID) {

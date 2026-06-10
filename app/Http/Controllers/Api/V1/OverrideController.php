@@ -63,4 +63,48 @@ class OverrideController extends Controller
             ],
         ], 201);
     }
+
+    /**
+     * DELETE /api/v1/admin/overrides
+     * Query param: device_id (required)
+     *
+     * Cancels the most recent unconsumed override queued for the given device.
+     * Returns 200 whether or not an override was pending (idempotent).
+     */
+    public function destroy(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'device_id' => ['required', 'uuid', 'exists:devices,id'],
+        ]);
+
+        $device = Device::findOrFail($data['device_id']);
+
+        $override = TimelineOverride::where('device_id', $device->id)
+            ->where('consumed', false)
+            ->latest()
+            ->first();
+
+        if (!$override) {
+            return response()->json([
+                'message'   => 'No pending override found for this device.',
+                'cancelled' => false,
+            ]);
+        }
+
+        $override->delete();
+
+        // Broadcast the cancellation so connected players can clear their queue
+        if (config('broadcasting.default') === 'reverb') {
+            try {
+                broadcast(new \App\Events\DeviceCommand($device, 'override_cancelled', []));
+            } catch (\Throwable) {
+                // Non-blocking; device will reconcile on next /sync poll.
+            }
+        }
+
+        return response()->json([
+            'message'   => "Override cancelled for device \"{$device->name}\".",
+            'cancelled' => true,
+        ]);
+    }
 }
