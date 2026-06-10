@@ -32,6 +32,12 @@ Route::prefix('v1')->group(function () {
         ->get('/sync', [SyncController::class, 'sync'])
         ->name('sync.index');
 
+    // Cheap reachability probe for the device's active connectivity check.
+    // Also returns server_time so the device can bound clock skew on played_at.
+    Route::middleware(['auth:sanctum', 'device.token:device:sync'])
+        ->get('/sync/ping', [SyncController::class, 'ping'])
+        ->name('sync.ping');
+
     Route::middleware(['auth:sanctum', 'device.token:device:log'])
         ->post('/logs', [SyncController::class, 'storeLogs'])
         ->name('sync.logs');
@@ -43,10 +49,6 @@ Route::prefix('v1')->group(function () {
     Route::middleware(['auth:sanctum', 'device.token:device:sync'])
         ->get('/assets/{assetId}/serve', [SyncController::class, 'serveAsset'])
         ->name('sync.asset-serve');
-
-    Route::middleware(['auth:sanctum', 'device.token:device:sync'])
-        ->get('/playback/next', [SyncController::class, 'nextAsset'])
-        ->name('sync.playback-next');
 
     Route::middleware(['auth:sanctum', 'device.token:device:sync'])
         ->post('/playback/start', [SyncController::class, 'reportPlaybackStart'])

@@ -12,48 +12,16 @@ use Illuminate\Support\Str;
 
 class QueueGenerationService
 {
+    /**
+     * Fraction of an asset's ideal inter-play interval that must elapse before it
+     * may be scheduled again, spreading its plays across the hour. Kept numerically
+     * identical to the React and Expo schedulers so all engines pace the same way.
+     */
+    private const PACING_FACTOR = 0.75;
+
     public function __construct(
         private readonly ConstraintValidationService $constraintValidator
     ) {}
-
-    /**
-     * Pops the next asset from the device's generated queue.
-     */
-    public function popNextAsset(Device $device): ?array
-    {
-        $queue = $this->getUpcomingQueue($device, 12);
-
-        // A frozen device only plays high-priority overrides (Play Next).
-        // Regular schedule items are withheld until it is unfrozen.
-        if ($device->is_frozen) {
-            $overrideIndex = null;
-            foreach ($queue as $i => $item) {
-                if (!empty($item['is_override'])) {
-                    $overrideIndex = $i;
-                    break;
-                }
-            }
-
-            if ($overrideIndex === null) {
-                return null;
-            }
-
-            $nextItem = $queue[$overrideIndex];
-            array_splice($queue, $overrideIndex, 1);
-            $this->saveQueue($device, $queue);
-
-            return $nextItem;
-        }
-
-        if (empty($queue)) {
-            return null;
-        }
-
-        $nextItem = array_shift($queue);
-        $this->saveQueue($device, $queue);
-
-        return $nextItem;
-    }
 
     /**
      * Gets the upcoming queue, generating new items if needed to fill the requested size.
@@ -156,15 +124,24 @@ class QueueGenerationService
         array $projLoopDaily = [],
         int $secondsPerSpot = 15
     ): array {
-        $primaryLoops = MediaLoop::where('is_fallback', false)
+        // Loops play in the operator-defined order (device.loop_orders); loops not
+        // listed there fall to the end by creation order. Concatenating each loop's
+        // assets (in order_index) into one flat list and walking it sequentially
+        // gives "finish a loop before advancing to the next" by construction.
+        $loopOrder = collect($device->loop_orders ?? [])->flip(); // loop_id => position
+        $byLoopOrder = fn (Collection $loops) => $loops->sortBy([
+            fn (MediaLoop $loop) => $loopOrder[$loop->id] ?? PHP_INT_MAX,
+            fn (MediaLoop $loop) => $loop->created_at,
+        ])->values();
+
+        $primaryLoops = $byLoopOrder(MediaLoop::where('is_fallback', false)
             ->with(['assets' => function($q) {
                 $q->where('is_synced', true)
                   ->orderBy('order_index', 'asc')
                   ->with('conflicts');
             }])
-            ->orderBy('created_at', 'asc')
-            ->get();
-            
+            ->get());
+
         $masterPrimaryAssets = new Collection();
         foreach ($primaryLoops as $loop) {
             foreach ($loop->assets as $asset) {
@@ -173,16 +150,15 @@ class QueueGenerationService
                 }
             }
         }
-        
-        $fallbackLoops = MediaLoop::where('is_fallback', true)
+
+        $fallbackLoops = $byLoopOrder(MediaLoop::where('is_fallback', true)
             ->with(['assets' => function($q) {
                 $q->where('is_synced', true)
                   ->orderBy('order_index', 'asc')
                   ->with('conflicts');
             }])
-            ->orderBy('created_at', 'asc')
-            ->get();
-            
+            ->get());
+
         $masterFallbackAssets = new Collection();
         foreach ($fallbackLoops as $loop) {
             foreach ($loop->assets as $asset) {
@@ -191,6 +167,21 @@ class QueueGenerationService
                 }
             }
         }
+
+        // Pacing state: seed each asset's last real play, then advance a virtual
+        // clock by each scheduled clip's duration so later items in this batch are
+        // spaced out too. Generation usually runs one item at a time as the queue
+        // drains, so in steady state the seed already reflects real playback.
+        $lastPlayedMs = \App\Models\PlaybackLog::whereIn(
+                'asset_id',
+                $masterPrimaryAssets->pluck('id')->merge($masterFallbackAssets->pluck('id'))->unique()->all()
+            )
+            ->selectRaw('asset_id, MAX(played_at) as last_played')
+            ->groupBy('asset_id')
+            ->pluck('last_played', 'asset_id')
+            ->map(fn ($t) => \Carbon\Carbon::parse($t)->getTimestampMs())
+            ->all();
+        $virtualMs = now()->getTimestampMs();
 
         $generated = [];
         
@@ -218,7 +209,8 @@ class QueueGenerationService
                 while ($attempts < $masterPrimaryAssets->count()) {
                     $currentIndex = ($currentIndex + 1) % $masterPrimaryAssets->count();
                     $candidate = $masterPrimaryAssets[$currentIndex];
-                    if ($this->isEligibleProjected($candidate, $previousAssetId, $projHourly, $projDaily, $projLoopDaily)) {
+                    if ($this->isEligibleProjected($candidate, $previousAssetId, $projHourly, $projDaily, $projLoopDaily)
+                        && $this->isDue($candidate, $virtualMs, $lastPlayedMs)) {
                         $selected = $candidate;
                         break;
                     }
@@ -226,6 +218,8 @@ class QueueGenerationService
                 }
             }
 
+            // Pacing gap: no primary asset is due right now — fill with the fallback
+            // loop so the board is never blank.
             if (!$selected && $masterFallbackAssets->isNotEmpty()) {
                 $attempts = 0;
                 while ($attempts < $masterFallbackAssets->count()) {
@@ -258,6 +252,10 @@ class QueueGenerationService
                     $projLoopDaily[$selected->loop_id] = ($projLoopDaily[$selected->loop_id] ?? 0)
                         + $selected->spotFootprint($secondsPerSpot);
                 }
+                // Advance pacing state: record this play's virtual time and move the
+                // clock forward by the clip's airtime for the next iteration.
+                $lastPlayedMs[$selected->id] = $virtualMs;
+                $virtualMs += (int) round(($selected->duration_secs ?? 0) * 1000);
                 $generated[] = [
                     'id' => (string) Str::uuid(),
                     'asset_id' => $selected->id,
@@ -291,6 +289,28 @@ class QueueGenerationService
 
         return $this->constraintValidator->validate($asset, $previousAssetId, null, $ph, $pd, $pl)
             === ConstraintValidationService::VALID;
+    }
+
+    /**
+     * Pacing gate (rule 4): an asset with a per-hour cap may only be scheduled once
+     * PACING_FACTOR of its ideal inter-play interval (3600s / maxPlaysPerHour) has
+     * elapsed since its last play, spreading its plays across the hour rather than
+     * letting them bunch up. Distribution only — never used to reject billing logs.
+     *
+     * @param array<string, int> $lastPlayedMs  asset_id => last (virtual/real) play epoch ms
+     */
+    private function isDue(MediaAsset $asset, int $virtualMs, array $lastPlayedMs): bool
+    {
+        if (empty($asset->max_plays_per_hour)) {
+            return true;
+        }
+        $last = $lastPlayedMs[$asset->id] ?? null;
+        if ($last === null) {
+            return true;
+        }
+        $idealIntervalMs = 3600000 / $asset->max_plays_per_hour;
+
+        return ($virtualMs - $last) >= self::PACING_FACTOR * $idealIntervalMs;
     }
 
     private function isAssignedToDevice(MediaAsset $asset, Device $device): bool

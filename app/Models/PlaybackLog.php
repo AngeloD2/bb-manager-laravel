@@ -19,6 +19,7 @@ class PlaybackLog extends Model
         'asset_id',
         'loop_id',
         'device_id',
+        'client_event_id',
         'spot_spent',
         'was_override',
         'played_at',

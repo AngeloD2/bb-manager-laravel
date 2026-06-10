@@ -158,6 +158,49 @@ class SpotManagerServiceTest extends TestCase
         $this->assertEquals(1, $result['rejected']);
     }
 
+    // ── Idempotency (offline flush retries) ───────────────────────────────────
+
+    /** @test */
+    public function a_repeated_client_event_id_is_deducted_only_once(): void
+    {
+        $asset   = $this->makeAsset(spots: 10);
+        $eventId = (string) \Str::uuid();
+        $entry   = [
+            'asset_id'        => $asset->id,
+            'client_event_id' => $eventId,
+            'played_at'       => now()->toIso8601String(),
+            'was_override'    => false,
+        ];
+
+        $first  = $this->service->processBatch($this->device, [$entry]);
+        $second = $this->service->processBatch($this->device, [$entry]);
+
+        $this->assertEquals('new', $first['results'][0]['status']);
+        $this->assertEquals('duplicate', $second['results'][0]['status']);
+
+        // Exactly one spot consumed and one log row written despite two flushes.
+        $this->assertDatabaseHas('media_assets', [
+            'id'                   => $asset->id,
+            'play_spots_remaining' => 9,
+        ]);
+        $this->assertCount(1, PlaybackLog::where('asset_id', $asset->id)->get());
+    }
+
+    /** @test */
+    public function results_report_per_entry_status(): void
+    {
+        $eligible  = $this->makeAsset(spots: 50);
+        $exhausted = $this->makeAsset(spots: 0);
+
+        $result = $this->service->processBatch($this->device, [
+            ['asset_id' => $eligible->id,  'client_event_id' => (string) \Str::uuid(), 'played_at' => now()->toIso8601String()],
+            ['asset_id' => $exhausted->id, 'client_event_id' => (string) \Str::uuid(), 'played_at' => now()->toIso8601String()],
+        ]);
+
+        $this->assertEquals('new', $result['results'][0]['status']);
+        $this->assertEquals('rejected', $result['results'][1]['status']);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function makeAsset(int $spots, ?int $maxPerHour = null, ?string $folderId = null): MediaAsset
