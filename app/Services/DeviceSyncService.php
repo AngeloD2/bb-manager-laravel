@@ -98,6 +98,14 @@ class DeviceSyncService
             ->filter($isAssignedToDevice)
             ->values();
 
+        // ── Assets: standalone (no loop) ─────────────────────────────────────
+        $standaloneAssets = $device->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+            ->where('is_synced', true)
+            ->whereNull('loop_id')
+            ->get()
+            ->filter($isAssignedToDevice)
+            ->values();
+
         // ── Pending overrides for this specific device ────────────────────────
         $pendingOverrides = $device->pendingOverrides()
             ->with('asset')
@@ -111,11 +119,12 @@ class DeviceSyncService
             'loops'          => $loops,
             'eligible_assets'  => $primaryAssets,
             'fallback_assets'  => $fallbackAssets,
+            'standalone_assets'=> $standaloneAssets,
             'pending_overrides'=> $pendingOverrides,
             // Pre-baked ordering + counter snapshot so the device can sequence
             // and meter spots locally (and entirely offline) between syncs.
             'schedule'         => $this->buildSchedule($device, $primaryAssets, $fallbackAssets),
-            'quota'            => $this->buildQuota($device, $primaryAssets, $fallbackAssets, $loops),
+            'quota'            => $this->buildQuota($device, $primaryAssets, $fallbackAssets, $standaloneAssets, $loops),
             'synced_at'        => now()->toIso8601String(),
             'broadcasting'     => [
                 'key'    => config('broadcasting.connections.reverb.key'),
@@ -163,12 +172,12 @@ class DeviceSyncService
      * remains the billing authority; this is only the starting point the device
      * meters against until the next reconciling sync.
      */
-    private function buildQuota(Device $device, Collection $primaryAssets, Collection $fallbackAssets, Collection $loops): array
+    private function buildQuota(Device $device, Collection $primaryAssets, Collection $fallbackAssets, Collection $standaloneAssets, Collection $loops): array
     {
         $secondsPerSpot = $this->secondsPerSpot();
 
         $assets = [];
-        foreach ($primaryAssets->merge($fallbackAssets) as $asset) {
+        foreach ($primaryAssets->merge($fallbackAssets)->merge($standaloneAssets) as $asset) {
             /** @var MediaAsset $asset */
             $assets[$asset->id] = [
                 'play_spots_remaining' => (int) $asset->play_spots_remaining,
