@@ -68,7 +68,7 @@ class AssetController extends Controller
             'file_type'             => ['required', 'in:VIDEO,GIF,PHOTO'],
             'loop_id'             => ['nullable', 'uuid', 'exists:media_loops,id'],
             'size_bytes'            => ['required', 'integer', 'min:1'],
-            'duration_secs'         => ['nullable', 'integer', 'min:8', 'max:15'],
+            'duration_secs'         => ['nullable', 'integer', 'min:1'],
             'geo_campaign'          => ['nullable', 'string', 'max:120'],
             'campaign_name'         => ['nullable', 'string', 'max:200'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
@@ -103,6 +103,7 @@ class AssetController extends Controller
     {
         $data = $request->validate([
             'name'                  => ['sometimes', 'string', 'max:200'],
+            'duration_secs'         => ['sometimes', 'integer', 'min:1'],
             'loop_id'             => ['nullable', 'uuid', 'exists:media_loops,id'],
             'geo_campaign'          => ['nullable', 'string', 'max:120'],
             'campaign_name'         => ['nullable', 'string', 'max:200'],
@@ -120,6 +121,13 @@ class AssetController extends Controller
         ]);
 
         $assetData = collect($data)->except('conflict_asset_ids')->toArray();
+
+        // Video duration is intrinsic to the file (ffprobe-measured) and is
+        // not editable; only still media (photo/GIF) has an adjustable dwell time.
+        if ($asset->file_type === 'VIDEO') {
+            unset($assetData['duration_secs']);
+        }
+
         $asset->update($assetData);
 
         if ($request->has('conflict_asset_ids')) {

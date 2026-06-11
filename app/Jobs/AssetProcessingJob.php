@@ -19,7 +19,7 @@ use Illuminate\Support\Facades\Storage;
  * Responsibilities:
  *  1. Download the file from S3 to a local temp file.
  *  2. Extract duration and resolution metadata via FFprobe.
- *  3. Clamp duration to the 8–15 second display window rule.
+ *  3. Set duration: measured length for videos/GIFs, admin-chosen dwell time for photos.
  *  4. Optionally stretch the media to the billboard's exact dimensions.
  *  5. Mark the asset as is_synced = true.
  *
@@ -106,12 +106,15 @@ class AssetProcessingJob implements ShouldQueue
             $probedDuration = $metadata['duration'] ?? $asset->duration_secs;
 
             $asset->update([
-                // Videos play for their full, ffprobe-measured length. The 8–15s
-                // display-window clamp only applies to still media (photo/GIF),
-                // which has no intrinsic duration and uses a fixed dwell time.
-                'duration_secs' => $asset->file_type === 'VIDEO'
-                    ? max(1, (int) round($probedDuration))
-                    : $this->clampDuration($probedDuration),
+                // Videos play for their full, ffprobe-measured length.
+                'duration_secs' => match ($asset->file_type) {
+                    'VIDEO' => max(1, (int) round($probedDuration)),
+                    // A still photo has no real duration — ffprobe reports the
+                    // single-frame length (~0.04s), so the admin-chosen dwell
+                    // time set at import is honored exactly.
+                    'PHOTO' => max(1, (int) round((float) $asset->duration_secs)),
+                    default => $this->clampDuration($probedDuration),
+                },
                 'size_bytes'    => $asset->size_bytes,
                 'is_synced'     => true,
             ]);
@@ -302,8 +305,9 @@ class AssetProcessingJob implements ShouldQueue
     }
 
     /**
-     * Enforce the 8–15 second display window for still media (photo/GIF), which
-     * has no intrinsic duration. Videos are exempt and keep their real length.
+     * Enforce the 8–15 second display window for GIFs, whose probed animation
+     * length may be far outside a usable dwell time. Videos keep their real
+     * length and photos keep the admin-chosen duration.
      */
     private function clampDuration(float $seconds): int
     {
