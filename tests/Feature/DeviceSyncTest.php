@@ -68,6 +68,7 @@ class DeviceSyncTest extends TestCase
                     'loops',
                     'eligible_assets',
                     'fallback_assets',
+                    'standalone_assets',
                     'pending_overrides',
                     'synced_at',
                 ],
@@ -251,6 +252,87 @@ class DeviceSyncTest extends TestCase
             ->assertOk()
             ->assertJsonStructure(['ok', 'server_time'])
             ->assertJsonPath('ok', true);
+    }
+
+    /** @test */
+    public function sync_returns_standalone_assets(): void
+    {
+        $this->actAsDevice();
+
+        // Standalone asset assigned to this device
+        $standaloneAssigned = MediaAsset::create([
+            'name'                  => 'Standalone Assigned',
+            'file_path'             => 'media/sa.mp4',
+            'file_type'             => 'VIDEO',
+            'loop_id'               => null,
+            'size_bytes'            => 1000,
+            'duration_secs'         => 10,
+            'is_synced'             => true,
+            'assigned_devices'      => [$this->device->id],
+            'play_spots_remaining'  => 50,
+        ]);
+
+        // Global standalone asset
+        $standaloneGlobal = MediaAsset::create([
+            'name'                  => 'Standalone Global',
+            'file_path'             => 'media/sg.mp4',
+            'file_type'             => 'VIDEO',
+            'loop_id'               => null,
+            'size_bytes'            => 1000,
+            'duration_secs'         => 10,
+            'is_synced'             => true,
+            'is_global'             => true,
+            'play_spots_remaining'  => 50,
+        ]);
+
+        $this->getJson('/api/v1/sync')
+            ->assertOk()
+            ->assertJsonCount(2, 'data.standalone_assets')
+            ->assertJsonPath('data.standalone_assets.0.id', $standaloneAssigned->id)
+            ->assertJsonPath('data.standalone_assets.1.id', $standaloneGlobal->id);
+    }
+
+    /** @test */
+    public function sync_excludes_unassigned_standalone_assets(): void
+    {
+        $this->actAsDevice();
+
+        $otherDevice = Device::create([
+            'name'     => 'Board Beta',
+            'location' => 'Highway 1',
+            'geo_zone' => 'West Coast Highways',
+        ]);
+
+        // Standalone asset assigned to another device
+        MediaAsset::create([
+            'name'                  => 'Standalone Other',
+            'file_path'             => 'media/so.mp4',
+            'file_type'             => 'VIDEO',
+            'loop_id'               => null,
+            'size_bytes'            => 1000,
+            'duration_secs'         => 10,
+            'is_synced'             => true,
+            'assigned_devices'      => [$otherDevice->id],
+            'play_spots_remaining'  => 50,
+        ]);
+
+        // Standalone asset not assigned to any device (not global)
+        MediaAsset::create([
+            'name'                  => 'Standalone Unassigned',
+            'file_path'             => 'media/su.mp4',
+            'file_type'             => 'VIDEO',
+            'loop_id'               => null,
+            'size_bytes'            => 1000,
+            'duration_secs'         => 10,
+            'is_synced'             => true,
+            'is_global'             => false,
+            'assigned_devices'      => null,
+            'play_spots_remaining'  => 50,
+        ]);
+
+        $this->getJson('/api/v1/sync')
+            ->assertOk()
+            ->assertJsonCount(0, 'data.standalone_assets');
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

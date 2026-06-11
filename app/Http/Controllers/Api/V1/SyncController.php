@@ -50,6 +50,7 @@ class SyncController extends Controller
                 'loops'           => MediaLoopResource::collection($payload['loops']),
                 'eligible_assets'   => MediaAssetResource::collection($payload['eligible_assets']),
                 'fallback_assets'   => MediaAssetResource::collection($payload['fallback_assets']),
+                'standalone_assets' => MediaAssetResource::collection($payload['standalone_assets']),
                 'pending_overrides' => $payload['pending_overrides']->map(fn ($o) => [
                     'id'       => $o->id,
                     'asset'    => new MediaAssetResource($o->asset),
