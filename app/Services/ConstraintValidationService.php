@@ -35,9 +35,11 @@ class ConstraintValidationService
         ?\Carbon\Carbon $now = null,
         int $projectedHourly = 0,
         int $projectedDaily = 0,
-        int $projectedLoopDaily = 0
+        int $projectedLoopDaily = 0,
+        ?string $timezone = null
     ): string {
-        $now ??= now();
+        $tz = $timezone ?? config('app.timezone', 'UTC');
+        $now ??= now($tz);
 
         // 0. Campaign flight period gate (skip before start or after end date)
         if (!$asset->isWithinCampaignPeriod($now)) {
@@ -69,7 +71,7 @@ class ConstraintValidationService
 
         // 3. Micro: max plays per day
         if ($asset->max_daily_plays !== null) {
-            if ($asset->playsToday() + $projectedDaily >= $asset->max_daily_plays) {
+            if ($asset->playsToday($timezone) + $projectedDaily >= $asset->max_daily_plays) {
                 return self::DAILY_EXCEEDED;
             }
         }
@@ -78,7 +80,7 @@ class ConstraintValidationService
         if ($asset->loop_id !== null) {
             $loop = $asset->loop ?? MediaLoop::find($asset->loop_id);
             if ($loop && $loop->max_daily_spots !== null
-                && ($loop->spotsSpentToday() + $projectedLoopDaily) >= $loop->max_daily_spots) {
+                && ($loop->spotsSpentToday($timezone) + $projectedLoopDaily) >= $loop->max_daily_spots) {
                 return self::FOLDER_DAILY_EXCEEDED;
             }
         }
@@ -100,8 +102,8 @@ class ConstraintValidationService
     }
 
     /** Convenience: returns true only when fully eligible. */
-    public function isEligible(MediaAsset $asset, ?string $previousAssetId = null): bool
+    public function isEligible(MediaAsset $asset, ?string $previousAssetId = null, ?string $timezone = null): bool
     {
-        return $this->validate($asset, $previousAssetId) === self::VALID;
+        return $this->validate($asset, $previousAssetId, null, 0, 0, 0, $timezone) === self::VALID;
     }
 }

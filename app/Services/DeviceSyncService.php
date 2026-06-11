@@ -86,7 +86,7 @@ class DeviceSyncService
             ->where('is_synced', true)
             ->whereHas('loop', fn ($q) => $q->where('is_fallback', false))
             ->get()
-            ->filter(fn (MediaAsset $asset) => $this->constraintValidator->isEligible($asset))
+            ->filter(fn (MediaAsset $asset) => $this->constraintValidator->isEligible($asset, null, $device->timezone))
             ->filter($isAssignedToDevice)
             ->values();
 
@@ -177,7 +177,7 @@ class DeviceSyncService
                 'plays_last_hour'      => $asset->playsLastHour(),
                 'last_played_at'       => $asset->lastPlayedAt(),
                 'max_daily_plays'      => $asset->max_daily_plays,
-                'plays_today'          => $asset->playsToday(),
+                'plays_today'          => $asset->playsToday($device->timezone),
                 'campaign_start_date'  => $asset->campaign_start_date?->format('Y-m-d'),
                 'campaign_end_date'    => $asset->campaign_end_date?->format('Y-m-d'),
                 'playback_times'       => $asset->playback_times ?? [],
@@ -192,7 +192,7 @@ class DeviceSyncService
             /** @var MediaLoop $loop */
             $loopQuota[$loop->id] = [
                 'max_daily_spots'   => $loop->max_daily_spots,
-                'spots_spent_today' => $loop->spotsSpentToday(),
+                'spots_spent_today' => $loop->spotsSpentToday($device->timezone),
             ];
         }
 

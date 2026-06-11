@@ -105,10 +105,11 @@ class MediaAsset extends Model
     }
 
     /** Plays today for daily cap enforcement. */
-    public function playsToday(): int
+    public function playsToday(?string $timezone = null): int
     {
+        $tz = $timezone ?? config('app.timezone', 'UTC');
         return $this->playbackLogs()
-            ->where('played_at', '>=', now()->startOfDay())
+            ->where('played_at', '>=', now($tz)->startOfDay())
             ->count();
     }
 

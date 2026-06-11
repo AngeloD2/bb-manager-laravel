@@ -54,13 +54,14 @@ class MediaLoop extends Model
      * Total spots spent today across all assets in this loop.
      * Used by ConstraintValidationService for macro-level cap enforcement.
      */
-    public function spotsSpentToday(): int
+    public function spotsSpentToday(?string $timezone = null): int
     {
+        $tz = $timezone ?? config('app.timezone', 'UTC');
         return PlaybackLog::whereIn(
             'asset_id',
             $this->assets()->pluck('id')
         )
-        ->where('played_at', '>=', now()->startOfDay())
+        ->where('played_at', '>=', now($tz)->startOfDay())
         ->sum('spot_spent');
     }
 

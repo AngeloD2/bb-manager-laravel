@@ -182,7 +182,10 @@ class AssetController extends Controller
         return response()->json([
             'object_key' => $objectKey,
             'upload_url' => $uploadUrl,
-            'headers'    => is_array($uploadData) ? $uploadData['headers'] : ['Content-Type' => $request->content_type, 'Content-Length' => (string) $request->size_bytes],
+            'headers'    => [
+                'Content-Type' => $request->content_type,
+                'Content-Length' => (string) $request->size_bytes,
+            ],
             'expires_in' => $expiresIn,
         ]);
     }

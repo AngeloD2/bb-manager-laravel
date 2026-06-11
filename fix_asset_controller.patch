@@ -1,0 +1,14 @@
+--- app/Http/Controllers/Api/V1/AssetController.php
++++ app/Http/Controllers/Api/V1/AssetController.php
+@@ -107,10 +107,7 @@
+         return response()->json([
+             'object_key' => $objectKey,
+             'upload_url' => $uploadUrl,
+-            'headers'    => [
+-                'Content-Type' => $request->content_type,
+-                'Content-Length' => (string) $request->size_bytes,
+-            ],
++            'headers'    => is_array($uploadData) ? $uploadData['headers'] : ['Content-Type' => $request->content_type, 'Content-Length' => (string) $request->size_bytes],
+             'expires_in' => $expiresIn,
+         ]);
+     }
