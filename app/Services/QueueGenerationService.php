@@ -164,10 +164,15 @@ class QueueGenerationService
         }
 
         // Look for the first matching item in the queue (usually at the very top).
-        // Remove it and re-save the queue.
         foreach ($queue as $index => $item) {
             if ($item['asset_id'] === $assetId && ($item['is_override'] ?? false) === $wasOverride) {
-                array_splice($queue, $index, 1);
+                if ($wasOverride) {
+                    // Overrides preempt the queue without advancing the primary cursor.
+                    array_splice($queue, $index, 1);
+                } else {
+                    // Normal plays mean the player skipped any items before this one.
+                    array_splice($queue, 0, $index + 1);
+                }
                 $this->saveQueue($device, $queue);
                 return;
             }
@@ -177,7 +182,11 @@ class QueueGenerationService
         // just match the asset_id (in case of override flag mismatch).
         foreach ($queue as $index => $item) {
             if ($item['asset_id'] === $assetId) {
-                array_splice($queue, $index, 1);
+                if ($item['is_override'] ?? false) {
+                    array_splice($queue, $index, 1);
+                } else {
+                    array_splice($queue, 0, $index + 1);
+                }
                 $this->saveQueue($device, $queue);
                 return;
             }
