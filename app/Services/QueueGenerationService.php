@@ -105,15 +105,24 @@ class QueueGenerationService
             'loop_id' => $asset->loop_id,
         ];
 
-        // Strip any existing overrides so there is only ever one
-        $queue = array_values(array_filter($queue, function ($item) {
-            return !($item['is_override'] ?? false);
-        }));
-
-        // Insert at position 0 — the React player will immediately interrupt
-        // current playback to play this override. Putting it at index 0 ensures
-        // the timeline correctly reflects it as "Now Playing".
-        array_unshift($queue, $overrideItem);
+        if (count($queue) > 0) {
+            $currentItem = $queue[0];
+            $restOfQueue = array_values(array_filter(array_slice($queue, 1), function ($item) {
+                return !($item['is_override'] ?? false);
+            }));
+            
+            $overrideItem['scheduled_time'] = $currentItem['scheduled_time'] ?? (now()->getTimestampMs());
+            $queue = array_merge([$overrideItem], $restOfQueue);
+            
+            // Recompute scheduled times for the rest of the queue
+            $t = $overrideItem['scheduled_time'] + ($overrideItem['duration_secs'] * 1000);
+            for ($i = 1; $i < count($queue); $i++) {
+                $queue[$i]['scheduled_time'] = $t;
+                $t += ($queue[$i]['duration_secs'] * 1000);
+            }
+        } else {
+            $queue[] = $overrideItem;
+        }
 
         $this->saveQueue($device, $queue);
     }
