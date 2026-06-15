@@ -111,16 +111,17 @@ class QueueGenerationService
                 return !($item['is_override'] ?? false);
             }));
             
-            $overrideItem['scheduled_time'] = $currentItem['scheduled_time'] ?? (now()->getTimestampMs());
-            $queue = array_merge([$overrideItem], $restOfQueue);
+            $overrideItem['scheduled_time'] = ($currentItem['scheduled_time'] ?? now()->getTimestampMs()) + (($currentItem['duration_secs'] ?? 15) * 1000);
+            $queue = array_merge([$currentItem, $overrideItem], $restOfQueue);
             
             // Recompute scheduled times for the rest of the queue
             $t = $overrideItem['scheduled_time'] + ($overrideItem['duration_secs'] * 1000);
-            for ($i = 1; $i < count($queue); $i++) {
+            for ($i = 2; $i < count($queue); $i++) {
                 $queue[$i]['scheduled_time'] = $t;
                 $t += ($queue[$i]['duration_secs'] * 1000);
             }
         } else {
+            $overrideItem['scheduled_time'] = now()->getTimestampMs();
             $queue[] = $overrideItem;
         }
 
