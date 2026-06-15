@@ -107,9 +107,17 @@ class DeviceSyncService
             ->values();
 
         // ── Pending overrides for this specific device ────────────────────────
+        // Only deliver an override once its asset has finished processing
+        // (is_synced=true, final file_path on storage). Overrides are consumed
+        // on delivery, so handing one out while the asset is still transcoding
+        // would burn it against an in-flux object and lose the "Play Next". Such
+        // overrides stay unconsumed and ride the next /sync — which AssetProcessingJob
+        // triggers the moment processing completes.
         $pendingOverrides = $device->pendingOverrides()
             ->with('asset')
-            ->get();
+            ->get()
+            ->filter(fn (TimelineOverride $o) => $o->asset && $o->asset->is_synced)
+            ->values();
 
         // Mark overrides as consumed so they are not re-delivered
         $pendingOverrides->each(fn (TimelineOverride $o) => $o->consume());

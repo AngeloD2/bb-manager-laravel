@@ -16,6 +16,7 @@ class MediaAssetResource extends JsonResource
             'download_url'          => $this->deliveryUrl(),
             'file_type'             => $this->file_type,
             'loop_id'             => $this->loop_id,
+            'order_index'           => $this->order_index,
             'size_bytes'            => $this->size_bytes,
             'duration_secs'         => $this->duration_secs,
             'geo_campaign'          => $this->geo_campaign,

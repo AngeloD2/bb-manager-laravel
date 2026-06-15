@@ -48,8 +48,13 @@ class OverrideController extends Controller
         // Inject the override directly into the server's generated timeline queue
         app(\App\Services\QueueGenerationService::class)->injectOverride($device, $asset);
 
-        // Broadcast via Reverb if configured (non-blocking)
-        if (config('broadcasting.default') === 'reverb') {
+        // Broadcast via Reverb if configured (non-blocking).
+        // Only push the instant override when the asset has finished processing —
+        // otherwise its download_url would point at an object still being
+        // transcoded/moved. For a still-processing asset the override is left
+        // queued (unconsumed) and delivered via /sync the moment AssetProcessingJob
+        // completes and notifies the device.
+        if ($asset->is_synced && config('broadcasting.default') === 'reverb') {
             try {
                 broadcast(new \App\Events\DeviceCommand($device, 'override', [
                     'override_id'   => $override->id,
