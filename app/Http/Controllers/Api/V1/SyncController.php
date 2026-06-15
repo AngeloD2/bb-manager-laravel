@@ -43,9 +43,10 @@ class SyncController extends Controller
         return response()->json([
             'data' => [
                 'device'    => [
-                    'id'       => $device->id,
-                    'name'     => $device->name,
-                    'geo_zone' => $device->geo_zone,
+                    'id'        => $device->id,
+                    'name'      => $device->name,
+                    'geo_zone'  => $device->geo_zone,
+                    'is_frozen' => (bool) $device->is_frozen,
                 ],
                 'loops'           => MediaLoopResource::collection($payload['loops']),
                 'eligible_assets'   => MediaAssetResource::collection($payload['eligible_assets']),
