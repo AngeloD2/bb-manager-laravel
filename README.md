@@ -18,6 +18,7 @@ Central source of truth for the React Native Expo billboard management app.
 | Storage       | AWS S3 + KMS server-side encryption           |
 | CDN           | AWS CloudFront (optional)                     |
 | Media parsing | FFprobe via shell_exec in AssetProcessingJob  |
+| Player SPA    | React 19 + Vite, served at `/player`          |
 
 ---
 
@@ -132,6 +133,71 @@ Expo App                        Laravel                        AWS S3
 
 ---
 
+## Billboard Player SPA
+
+The player that runs on the physical board lives in this repo at
+`resources/js/player` (it was previously the standalone `bb-manager-player-react`
+repository). Laravel builds it with Vite and serves it from
+`resources/views/player.blade.php` at **`/player`**.
+
+```bash
+npm install
+npm run dev      # Vite dev server; Laravel picks it up via public/hot
+npm run build    # production assets into public/build
+```
+
+Because the SPA is now served from the same origin as the API, `VITE_API_URL`
+defaults to the relative `/api/v1` — no host to rewrite when the LAN address
+changes. `VITE_REVERB_*` interpolate from the `REVERB_*` values in the same
+`.env`.
+
+It remains a fully client-side, offline-first player: `lib/db.js` persists the
+device session, schedule and quota snapshot to IndexedDB so a board cold-boots
+and plays with no network, and `lib/scheduler.js` meters spots locally, emitting
+play events keyed by a client UUID that `/logs` dedups on reconcile. Serving it
+from Laravel changes where the bundle comes from, not how it runs.
+
+---
+
+## Offline Cold Boot
+
+A running board already survives a dead network — IndexedDB holds the session,
+schedule and quota; the Cache API holds the media. The gap was **cold boot**: a
+board that power-cycled while the backend was unreachable could not load the HTML
+and JS needed to reach that offline logic, so it sat on a dead page with a
+perfectly good schedule on disk.
+
+`public/sw.js` closes that gap. It caches the shell (`/player`) and the hashed
+`/build` assets, and is registered from `lib/registerSW.js` in production builds
+only — in dev it unregisters instead, so a stale worker cannot break HMR.
+
+Two rules in it are load-bearing, and `tests/js/sw.test.mjs` holds them:
+
+- **`/api/*` is never cached.** `useConnectionStatus` decides a board is online by
+  probing `/sync/ping`; a cached 200 there would make a board with a dead backend
+  believe it is online and stop queueing plays for reconcile. `/sync` carries the
+  billed quota snapshot and `/assets/{id}/serve` mints a short-lived presigned
+  URL per request — neither is safe to replay.
+- **`bcc-edge-cache-v1` is never deleted.** Activation purges only superseded
+  `bcc-player-shell-*` caches. The media cache belongs to `useEdgeCache` and is
+  what keeps a board playing offline.
+
+The shell is fetched network-first with a 3s timeout, so a healthy board picks up
+a new deploy on its next restart while a board on a wedged link falls back to
+cache instead of hanging on a white screen. There is no auto-update-and-reload:
+swapping assets under a billboard that is mid-playback risks interrupting a paid
+spot, and network-first already means the next restart is current.
+
+> **Requires a secure context.** Service workers — like the Cache API
+> `useEdgeCache` depends on — only run over **https or localhost**. A board
+> pointed at a plain-http LAN address (`http://192.168.x.x:8000`) gets neither:
+> it still plays, and IndexedDB still persists its schedule, but it re-fetches
+> the shell from the network on every boot and so has no offline cold boot.
+> Production behind Laravel Cloud's https is fine; a LAN deployment needs TLS (or
+> a localhost-served player) for this to take effect.
+
+---
+
 ## Running Tests
 
 ```bash
@@ -152,6 +218,10 @@ php artisan test --testsuite=Feature
 | `SecureShareLinkTest.php`       | PIN verification, OTP expiry, revocation, rate-limiting|
 | `DeviceSyncTest.php`            | Sync payload, override delivery, heartbeat             |
 | `AssetControllerTest.php`       | Presigned URL, confirm flow, duration validation       |
+
+JS scheduler tests live in `tests/js` and run with `npm test`; `LoopParityTest.php`
+and `tests/js/loop-parity.test.mjs` assert against the same
+`tests/fixtures/loop_parity.json` so the PHP and JS engines cannot drift apart.
 
 ---
 
