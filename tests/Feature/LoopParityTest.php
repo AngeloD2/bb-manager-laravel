@@ -17,7 +17,7 @@ use Tests\TestCase;
  * loop-rule decisions (order, loop-completion, daily-cap exclusion) as the JS
  * scheduler. Both sides assert against the SAME canonical fixture
  * (tests/fixtures/loop_parity.json); the JS counterpart lives in
- * bb-manager-player-react/test/loop-parity.test.mjs. If either engine drifts on
+ * tests/js/loop-parity.test.mjs. If either engine drifts on
  * those rules, its parity test fails.
  */
 class LoopParityTest extends TestCase
