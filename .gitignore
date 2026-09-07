@@ -30,3 +30,7 @@ yarn-error.log
 !/storage/framework/sessions/.gitkeep
 /storage/framework/views/*
 !/storage/framework/views/.gitkeep
+
+# merge/patch debris
+*.orig
+*.rej

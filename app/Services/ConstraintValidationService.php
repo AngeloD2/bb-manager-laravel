@@ -15,10 +15,10 @@ use App\Models\MediaLoop;
 class ConstraintValidationService
 {
     public const VALID                   = 'valid';
-    public const NO_TOKENS               = 'no_tokens';
+    public const NO_SPOTS_REMAINING      = 'no_spots_remaining';
     public const HOURLY_EXCEEDED         = 'hourly_exceeded';
     public const DAILY_EXCEEDED          = 'daily_exceeded';
-    public const FOLDER_DAILY_EXCEEDED   = 'folder_daily_exceeded';
+    public const LOOP_DAILY_EXCEEDED     = 'loop_daily_exceeded';
     public const OUTSIDE_FLIGHT_DATES    = 'outside_flight_dates';
     public const OUTSIDE_PLAYBACK_WINDOW = 'outside_playback_window';
 
@@ -53,7 +53,7 @@ class ConstraintValidationService
 
         // 1. Spot economy gate
         if ($asset->play_spots_remaining <= 0) {
-            return self::NO_TOKENS;
+            return self::NO_SPOTS_REMAINING;
         }
 
         // The $projected* counts represent spots already scheduled for this asset
@@ -81,7 +81,7 @@ class ConstraintValidationService
             $loop = $asset->loop ?? MediaLoop::find($asset->loop_id);
             if ($loop && $loop->max_daily_spots !== null
                 && ($loop->spotsSpentToday($timezone) + $projectedLoopDaily) >= $loop->max_daily_spots) {
-                return self::FOLDER_DAILY_EXCEEDED;
+                return self::LOOP_DAILY_EXCEEDED;
             }
         }
 

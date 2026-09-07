@@ -69,7 +69,7 @@ class SpotManagerServiceTest extends TestCase
     // ── Spot exhaustion ──────────────────────────────────────────────────────
 
     /** @test */
-    public function it_rejects_plays_when_asset_has_no_tokens_remaining(): void
+    public function it_rejects_plays_when_asset_has_no_spots_remaining(): void
     {
         $asset = $this->makeAsset(spots: 0);
 
@@ -106,7 +106,7 @@ class SpotManagerServiceTest extends TestCase
     // ── Loop daily cap ─────────────────────────────────────────────────────
 
     /** @test */
-    public function it_rejects_plays_when_folder_daily_cap_is_reached(): void
+    public function it_rejects_plays_when_loop_daily_cap_is_reached(): void
     {
         $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'max_daily_spots' => 2]);
         $asset  = $this->makeAsset(spots: 100, folderId: $loop->id);
@@ -128,7 +128,7 @@ class SpotManagerServiceTest extends TestCase
     // ── Fallback assets bypass constraints ────────────────────────────────────
 
     /** @test */
-    public function fallback_assets_are_always_accepted_regardless_of_token_count(): void
+    public function fallback_assets_are_always_accepted_regardless_of_spots_remaining(): void
     {
         $fallbackFolder = MediaLoop::create(['name' => 'Filler', 'is_fallback' => true]);
         $asset = $this->makeAsset(spots: 0, folderId: $fallbackFolder->id);
