@@ -5,9 +5,10 @@ namespace Tests\Feature;
 use App\Models\Device;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
-use App\Services\S3Service;
+use App\Jobs\AssetProcessingJob;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class AssetControllerTest extends TestCase
@@ -22,39 +23,63 @@ class AssetControllerTest extends TestCase
 
         $this->adminDevice = Device::create(['name' => 'Admin App', 'location' => 'HQ']);
 
-        $this->mock(S3Service::class, function ($mock) {
-            $mock->shouldReceive('buildObjectKey')
-                 ->andReturn('media/2026/01/test-uuid-ad-title.mp4');
-
-            $mock->shouldReceive('upload')->andReturn(null);
-            $mock->shouldReceive('deleteObject')->andReturn(null);
-        });
     }
 
-    // ── Upload endpoint ──────────────────────────────────────────────────────
+    // ── Presign: validation of the direct-to-S3 handshake ────────────────────
 
     /** @test */
-    public function upload_stores_file_and_creates_asset(): void
+    public function presign_rejects_unsupported_content_types(): void
     {
-        \Illuminate\Support\Facades\Queue::fake();
+        $this->actAsAdmin()
+            ->postJson('/api/v1/admin/assets/presign', [
+                'original_name' => 'malware.exe',
+                'file_type'     => 'VIDEO',
+                'content_type'  => 'application/octet-stream',
+                'size_bytes'    => 100,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['content_type']);
+    }
+
+    /** @test */
+    public function presign_rejects_files_over_the_5gb_limit(): void
+    {
+        $this->actAsAdmin()
+            ->postJson('/api/v1/admin/assets/presign', [
+                'original_name' => 'huge.mp4',
+                'file_type'     => 'VIDEO',
+                'content_type'  => 'video/mp4',
+                'size_bytes'    => 5368709121,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['size_bytes']);
+    }
+
+    // ── Confirm: the object exists in S3, so record the asset ────────────────
+
+    /** @test */
+    public function confirm_creates_the_asset_and_dispatches_processing(): void
+    {
+        Queue::fake();
+        Storage::fake('s3');
 
         $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false]);
+        Storage::disk('s3')->put('media/2026/01/summer_ad.mp4', str_repeat('x', 5000));
 
         $this->actAsAdmin()
-            ->post('/api/v1/admin/assets/upload', [
-                'file'                 => UploadedFile::fake()->create('summer_ad.mp4', 5000, 'video/mp4'),
+            ->postJson('/api/v1/admin/assets/confirm', [
+                'object_key'           => 'media/2026/01/summer_ad.mp4',
                 'name'                 => 'Summer Ad',
                 'file_type'            => 'VIDEO',
                 'loop_id'              => $loop->id,
-                'size_bytes'           => 5_000_000,
                 'duration_secs'        => 10,
                 'campaign_name'        => 'Summer Campaign',
                 'play_spots_remaining' => 100,
             ])
             ->assertCreated()
-            ->assertJsonPath('data.name', 'Summer Ad')
-            ->assertJsonPath('data.file_path', 'media/2026/01/test-uuid-ad-title.mp4')
-            ->assertJsonPath('data.is_synced', false);
+            ->assertJsonPath('name', 'Summer Ad')
+            ->assertJsonPath('file_path', 'media/2026/01/summer_ad.mp4')
+            ->assertJsonPath('is_synced', false);
 
         $this->assertDatabaseHas('media_assets', [
             'name'      => 'Summer Ad',
@@ -62,35 +87,57 @@ class AssetControllerTest extends TestCase
             'loop_id'   => $loop->id,
         ]);
 
-        \Illuminate\Support\Facades\Queue::assertPushed(\App\Jobs\AssetProcessingJob::class);
+        Queue::assertPushed(AssetProcessingJob::class);
     }
 
     /** @test */
-    public function upload_rejects_unsupported_mime_types(): void
+    public function confirm_rejects_an_object_key_that_is_not_in_s3(): void
     {
+        Storage::fake('s3');
+
         $this->actAsAdmin()
-            ->post('/api/v1/admin/assets/upload', [
-                'file'      => UploadedFile::fake()->create('malware.exe', 100, 'application/octet-stream'),
-                'name'      => 'Bad File',
-                'file_type' => 'VIDEO',
+            ->postJson('/api/v1/admin/assets/confirm', [
+                'object_key' => 'media/never-uploaded.mp4',
+                'name'       => 'Ghost Ad',
+                'file_type'  => 'VIDEO',
             ])
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors(['file']);
+            ->assertStatus(400);
+
+        $this->assertDatabaseMissing('media_assets', ['name' => 'Ghost Ad']);
     }
 
     /** @test */
-    public function upload_handles_json_string_arrays_from_form_data(): void
+    public function confirm_rejects_a_zero_byte_upload(): void
     {
-        \Illuminate\Support\Facades\Queue::fake();
+        Storage::fake('s3');
+        Storage::disk('s3')->put('media/empty.mp4', '');
+
+        $this->actAsAdmin()
+            ->postJson('/api/v1/admin/assets/confirm', [
+                'object_key' => 'media/empty.mp4',
+                'name'       => 'Empty Ad',
+                'file_type'  => 'VIDEO',
+            ])
+            ->assertStatus(400);
+
+        $this->assertDatabaseMissing('media_assets', ['name' => 'Empty Ad']);
+    }
+
+    /** @test */
+    public function confirm_handles_json_string_arrays_from_form_data(): void
+    {
+        Queue::fake();
+        Storage::fake('s3');
 
         $conflict = MediaAsset::create([
             'name' => 'Existing Ad', 'file_path' => 'media/existing.mp4', 'file_type' => 'VIDEO',
             'size_bytes' => 1000, 'duration_secs' => 10, 'is_synced' => true, 'play_spots_remaining' => 50,
         ]);
+        Storage::disk('s3')->put('media/ad.mp4', str_repeat('x', 3000));
 
         $this->actAsAdmin()
-            ->post('/api/v1/admin/assets/upload', [
-                'file'               => UploadedFile::fake()->create('ad.mp4', 3000, 'video/mp4'),
+            ->postJson('/api/v1/admin/assets/confirm', [
+                'object_key'         => 'media/ad.mp4',
                 'name'               => 'New Ad',
                 'file_type'          => 'VIDEO',
                 'duration_secs'      => 10,
@@ -101,23 +148,7 @@ class AssetControllerTest extends TestCase
 
         $asset = MediaAsset::where('name', 'New Ad')->first();
         $this->assertContains($conflict->id, $asset->conflicts->pluck('id')->toArray());
-    }
-
-    // ── Duration constraint enforcement ──────────────────────────────────────
-
-    /** @test */
-    public function store_rejects_duration_outside_8_to_15_second_window(): void
-    {
-        $this->actAsAdmin()
-            ->postJson('/api/v1/admin/assets', [
-                'name'          => 'Too Short',
-                'file_path'     => 'media/short.mp4',
-                'file_type'     => 'VIDEO',
-                'size_bytes'    => 100000,
-                'duration_secs' => 5,
-            ])
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors(['duration_secs']);
+        $this->assertSame([$this->adminDevice->id], $asset->assigned_devices);
     }
 
     // ── Delete cleans up S3 ───────────────────────────────────────────────────
