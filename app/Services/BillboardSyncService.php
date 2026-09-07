@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Models\Setting;
@@ -11,67 +11,67 @@ use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
 /**
- * DeviceSyncService
+ * BillboardSyncService
  *
- * Assembles the complete sync payload that a billboard device receives on
+ * Assembles the complete sync payload that a billboard receives on
  * GET /api/v1/sync.  It strips out spot-exhausted and constraint-blocked
- * assets so the device only sees what it is actually eligible to play,
+ * assets so the billboard only sees what it is actually eligible to play,
  * then appends any pending override commands.
  */
-class DeviceSyncService
+class BillboardSyncService
 {
     public function __construct(
         private readonly ConstraintValidationService $constraintValidator
     ) {}
 
     /**
-     * Build and return the full sync payload for a given device.
+     * Build and return the full sync payload for a given billboard.
      *
      * @return array{
-     *   device: array,
+     *   billboard: array,
      *   loops: Collection,
      *   eligible_assets: Collection,
      *   fallback_assets: Collection,
      *   pending_overrides: Collection,
      * }
      */
-    public function buildPayload(Device $device): array
+    public function buildPayload(Billboard $billboard): array
     {
-        // Mark the device as online
-        $device->heartbeat();
+        // Mark the billboard as online
+        $billboard->heartbeat();
 
         // ── Loops ──────────────────────────────────────────────────────────
         $loops = MediaLoop::withCount('assets')
             ->get()
-            ->filter(function (MediaLoop $loop) use ($device) {
-                // Global loops are visible to all devices
+            ->filter(function (MediaLoop $loop) use ($billboard) {
+                // Global loops are visible to all billboards
                 if ($loop->is_global) {
                     return true;
                 }
                 // Per-billboard: must be explicitly assigned
-                if (empty($loop->assigned_devices)) {
+                if (empty($loop->assigned_billboards)) {
                     return false;
                 }
-                return in_array($device->id, $loop->assigned_devices);
+                return in_array($billboard->id, $loop->assigned_billboards);
             })
             ->values();
 
-        $isAssignedToDevice = function (MediaAsset $asset) use ($device) {
-            // Asset-level: global assets are visible to all devices
+        $isAssignedToBillboard = function (MediaAsset $asset) use ($billboard) {
+            // Asset-level: global assets are visible to all billboards
             if ($asset->is_global) {
                 return true;
             }
             // Asset-level: per-billboard check
-            if (!empty($asset->assigned_devices) && !in_array($device->id, $asset->assigned_devices)) {
+            if (!empty($asset->assigned_billboards) && !in_array($billboard->id, $asset->assigned_billboards)) {
                 return false;
             }
-            if (empty($asset->assigned_devices) && !($asset->loop && $asset->loop->is_global)) {
+            if (empty($asset->assigned_billboards) && !($asset->loop && $asset->loop->is_global)) {
                 // Not explicitly assigned and loop is not global — check loop assignment
-                if ($asset->loop && !empty($asset->loop->assigned_devices) && !in_array($device->id, $asset->loop->assigned_devices)) {
+                if ($asset->loop && !empty($asset->loop->assigned_billboards) && !in_array($billboard->id, $asset->loop->assigned_billboards)) {
                     return false;
                 }
-                // Not assigned to any device and loop has no assignments — not visible
-                if ($asset->loop && empty($asset->loop->assigned_devices) && !$asset->loop->is_global) {
+                // Not assigned to any billboard and loop has no assignments — not visible
+                if ($asset->loop && empty($asset->loop->assigned_billboards) && !$asset->loop->is_global) {
                     return false;
                 }
                 if (!$asset->loop) {
@@ -82,38 +82,38 @@ class DeviceSyncService
         };
 
         // ── Assets: primary (non-fallback) ───────────────────────────────────
-        $primaryAssets = $device->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+        $primaryAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
             ->where('is_synced', true)
             ->whereHas('loop', fn ($q) => $q->where('is_fallback', false))
             ->get()
-            ->filter(fn (MediaAsset $asset) => $this->constraintValidator->isEligible($asset, null, $device->timezone))
-            ->filter($isAssignedToDevice)
+            ->filter(fn (MediaAsset $asset) => $this->constraintValidator->isEligible($asset, null, $billboard->timezone))
+            ->filter($isAssignedToBillboard)
             ->values();
 
         // ── Assets: fallback ─────────────────────────────────────────────────
-        $fallbackAssets = $device->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+        $fallbackAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
             ->where('is_synced', true)
             ->whereHas('loop', fn ($q) => $q->where('is_fallback', true))
             ->get()
-            ->filter($isAssignedToDevice)
+            ->filter($isAssignedToBillboard)
             ->values();
 
         // ── Assets: standalone (no loop) ─────────────────────────────────────
-        $standaloneAssets = $device->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+        $standaloneAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
             ->where('is_synced', true)
             ->whereNull('loop_id')
             ->get()
-            ->filter($isAssignedToDevice)
+            ->filter($isAssignedToBillboard)
             ->values();
 
-        // ── Pending overrides for this specific device ────────────────────────
+        // ── Pending overrides for this specific billboard ────────────────────────
         // Only deliver an override once its asset has finished processing
         // (is_synced=true, final file_path on storage). Overrides are consumed
         // on delivery, so handing one out while the asset is still transcoding
         // would burn it against an in-flux object and lose the "Play Next". Such
         // overrides stay unconsumed and ride the next /sync — which AssetProcessingJob
         // triggers the moment processing completes.
-        $pendingOverrides = $device->pendingOverrides()
+        $pendingOverrides = $billboard->pendingOverrides()
             ->with('asset')
             ->get()
             ->filter(fn (TimelineOverride $o) => $o->asset && $o->asset->is_synced)
@@ -123,16 +123,16 @@ class DeviceSyncService
         $pendingOverrides->each(fn (TimelineOverride $o) => $o->consume());
 
         return [
-            'device'           => $device,
+            'billboard'           => $billboard,
             'loops'          => $loops,
             'eligible_assets'  => $primaryAssets,
             'fallback_assets'  => $fallbackAssets,
             'standalone_assets'=> $standaloneAssets,
             'pending_overrides'=> $pendingOverrides,
-            // Pre-baked ordering + counter snapshot so the device can sequence
+            // Pre-baked ordering + counter snapshot so the billboard can sequence
             // and meter spots locally (and entirely offline) between syncs.
-            'schedule'         => $this->buildSchedule($device, $primaryAssets, $fallbackAssets),
-            'quota'            => $this->buildQuota($device, $primaryAssets, $fallbackAssets, $standaloneAssets, $loops),
+            'schedule'         => $this->buildSchedule($billboard, $primaryAssets, $fallbackAssets),
+            'quota'            => $this->buildQuota($billboard, $primaryAssets, $fallbackAssets, $standaloneAssets, $loops),
             'synced_at'        => now()->toIso8601String(),
             'broadcasting'     => [
                 'key'    => config('broadcasting.connections.reverb.key'),
@@ -144,16 +144,16 @@ class DeviceSyncService
     }
 
     /**
-     * Order the eligible assets the way the device should play them round-robin.
-     * Primary assets are sequenced by their loop's position in the device's
+     * Order the eligible assets the way the billboard should play them round-robin.
+     * Primary assets are sequenced by their loop's position in the billboard's
      * user-defined `loop_orders`, then by each asset's `order_index`. Fallbacks
      * follow their own order and are only reached when no primary qualifies.
      *
      * @return array{primary: array<int, array>, fallback: array<int, array>}
      */
-    private function buildSchedule(Device $device, Collection $primaryAssets, Collection $fallbackAssets): array
+    private function buildSchedule(Billboard $billboard, Collection $primaryAssets, Collection $fallbackAssets): array
     {
-        $loopOrder = collect($device->loop_orders ?? [])->flip(); // loop_id => position
+        $loopOrder = collect($billboard->loop_orders ?? [])->flip(); // loop_id => position
 
         $sequence = fn (Collection $assets) => $assets
             ->sortBy([
@@ -175,12 +175,12 @@ class DeviceSyncService
     }
 
     /**
-     * Snapshot of every counter the device decrements locally between syncs, plus
+     * Snapshot of every counter the billboard decrements locally between syncs, plus
      * the timestamps it needs to roll hourly/daily windows offline. The server
-     * remains the billing authority; this is only the starting point the device
+     * remains the billing authority; this is only the starting point the billboard
      * meters against until the next reconciling sync.
      */
-    private function buildQuota(Device $device, Collection $primaryAssets, Collection $fallbackAssets, Collection $standaloneAssets, Collection $loops): array
+    private function buildQuota(Billboard $billboard, Collection $primaryAssets, Collection $fallbackAssets, Collection $standaloneAssets, Collection $loops): array
     {
         $secondsPerSpot = $this->secondsPerSpot();
 
@@ -194,7 +194,7 @@ class DeviceSyncService
                 'plays_last_hour'      => $asset->playsLastHour(),
                 'last_played_at'       => $asset->lastPlayedAt(),
                 'max_daily_plays'      => $asset->max_daily_plays,
-                'plays_today'          => $asset->playsToday($device->timezone),
+                'plays_today'          => $asset->playsToday($billboard->timezone),
                 'campaign_start_date'  => $asset->campaign_start_date?->format('Y-m-d'),
                 'campaign_end_date'    => $asset->campaign_end_date?->format('Y-m-d'),
                 'playback_times'       => $asset->playback_times ?? [],
@@ -209,14 +209,14 @@ class DeviceSyncService
             /** @var MediaLoop $loop */
             $loopQuota[$loop->id] = [
                 'max_daily_spots'   => $loop->max_daily_spots,
-                'spots_spent_today' => $loop->spotsSpentToday($device->timezone),
+                'spots_spent_today' => $loop->spotsSpentToday($billboard->timezone),
             ];
         }
 
         return [
             'as_of'            => now()->toIso8601String(),
             'seconds_per_spot' => $secondsPerSpot,
-            'device'           => $this->deviceSpotState($device),
+            'billboard'           => $this->billboardSpotState($billboard),
             'assets'           => $assets,
             'loops'            => $loopQuota,
         ];
@@ -224,33 +224,33 @@ class DeviceSyncService
 
     /**
      * Board-level inventory for today's active window. Mirrors the admin
-     * dashboard math in DeviceController so the device and dashboard agree on
+     * dashboard math in BillboardController so the billboard and dashboard agree on
      * total/played/open spots.
      *
      * @return array{active_hours_start: ?string, active_hours_end: ?string, total_spots: int, played_spots: int, open_spots: int}
      */
-    public function deviceSpotState(Device $device): array
+    public function billboardSpotState(Billboard $billboard): array
     {
         $secondsPerSpot = $this->secondsPerSpot();
         $totalSpots = 0;
         $playedSpots = 0;
 
-        if ($device->active_hours_start && $device->active_hours_end) {
-            $tz  = $device->timezone ?? 'UTC';
+        if ($billboard->active_hours_start && $billboard->active_hours_end) {
+            $tz  = $billboard->timezone ?? 'UTC';
             $now = now($tz);
-            $start = Carbon::parse($now->format('Y-m-d') . ' ' . Carbon::parse($device->active_hours_start)->format('H:i:s'), $tz);
-            $end   = Carbon::parse($now->format('Y-m-d') . ' ' . Carbon::parse($device->active_hours_end)->format('H:i:s'), $tz);
+            $start = Carbon::parse($now->format('Y-m-d') . ' ' . Carbon::parse($billboard->active_hours_start)->format('H:i:s'), $tz);
+            $end   = Carbon::parse($now->format('Y-m-d') . ' ' . Carbon::parse($billboard->active_hours_end)->format('H:i:s'), $tz);
             if ($end->lessThan($start)) {
                 $end->addDay();
             }
 
             $totalSpots  = (int) floor($start->diffInSeconds($end) / $secondsPerSpot);
-            $playedSpots = (int) $device->playbackLogs()->whereBetween('played_at', [$start, $end])->sum('spot_spent');
+            $playedSpots = (int) $billboard->playbackLogs()->whereBetween('played_at', [$start, $end])->sum('spot_spent');
         }
 
         return [
-            'active_hours_start' => $device->active_hours_start,
-            'active_hours_end'   => $device->active_hours_end,
+            'active_hours_start' => $billboard->active_hours_start,
+            'active_hours_end'   => $billboard->active_hours_end,
             'total_spots'        => $totalSpots,
             'played_spots'       => $playedSpots,
             'open_spots'         => max(0, $totalSpots - $playedSpots),

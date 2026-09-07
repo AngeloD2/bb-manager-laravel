@@ -7,21 +7,21 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * EnsureDeviceToken
+ * EnsureBillboardToken
  *
  * Guards the /api/v1/sync and /api/v1/logs routes.
- * Verifies the Sanctum token has the 'device:sync' or 'device:log' ability
- * and that the authenticated model is a Device (not an admin user, if you
+ * Verifies the Sanctum token has the 'billboard:sync' or 'billboard:log' ability
+ * and that the authenticated model is a Billboard (not an admin user, if you
  * add admin user auth later).
  */
-class EnsureDeviceToken
+class EnsureBillboardToken
 {
-    public function handle(Request $request, Closure $next, string $ability = 'device:sync'): Response
+    public function handle(Request $request, Closure $next, string $ability = 'billboard:sync'): Response
     {
         $user = $request->user();
 
-        if (! $user instanceof \App\Models\Device) {
-            return response()->json(['message' => 'Unauthorized. Device token required.'], 401);
+        if (! $user instanceof \App\Models\Billboard) {
+            return response()->json(['message' => 'Unauthorized. Billboard token required.'], 401);
         }
 
         if (! $request->user()->tokenCan($ability)) {

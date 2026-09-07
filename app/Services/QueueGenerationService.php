@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Models\Setting;
@@ -26,9 +26,9 @@ class QueueGenerationService
     /**
      * Gets the upcoming queue, generating new items if needed to fill the requested size.
      */
-    public function getUpcomingQueue(Device $device, int $targetSize = 12): array
+    public function getUpcomingQueue(Billboard $billboard, int $targetSize = 12): array
     {
-        $cacheKey = "device:{$device->id}:queue";
+        $cacheKey = "billboard:{$billboard->id}:queue";
         $queue = Cache::get($cacheKey, []);
 
         // Slot length is global; loop caps are charged by airtime (a long clip
@@ -75,25 +75,25 @@ class QueueGenerationService
         if ($itemsToGenerate > 0) {
             // Find what is currently playing if the queue is totally empty
             if (empty($queue)) {
-                $previousAssetId = \App\Models\PlaybackLog::where('device_id', $device->id)
+                $previousAssetId = \App\Models\PlaybackLog::where('billboard_id', $billboard->id)
                     ->orderBy('played_at', 'desc')
                     ->value('asset_id');
             }
 
             $newItems = $this->generateNextSequence(
-                $device, $itemsToGenerate, $previousAssetId,
+                $billboard, $itemsToGenerate, $previousAssetId,
                 $projHourly, $projDaily, $projLoopDaily, $secondsPerSpot
             );
             $queue = array_merge($queue, $newItems);
-            $this->saveQueue($device, $queue);
+            $this->saveQueue($billboard, $queue);
         }
 
         return $queue;
     }
 
-    public function injectOverride(Device $device, MediaAsset $asset): void
+    public function injectOverride(Billboard $billboard, MediaAsset $asset): void
     {
-        $queue = $this->getUpcomingQueue($device, 12);
+        $queue = $this->getUpcomingQueue($billboard, 12);
         
         $overrideItem = [
             'id' => (string) Str::uuid(),
@@ -125,12 +125,12 @@ class QueueGenerationService
             $queue[] = $overrideItem;
         }
 
-        $this->saveQueue($device, $queue);
+        $this->saveQueue($billboard, $queue);
     }
 
-    public function cancelOverride(Device $device): void
+    public function cancelOverride(Billboard $billboard): void
     {
-        $cacheKey = "device:{$device->id}:queue";
+        $cacheKey = "billboard:{$billboard->id}:queue";
         $queue = Cache::get($cacheKey, []);
 
         if (empty($queue)) {
@@ -141,22 +141,22 @@ class QueueGenerationService
             return !($item['is_override'] ?? false);
         }));
 
-        $this->saveQueue($device, $updatedQueue);
+        $this->saveQueue($billboard, $updatedQueue);
     }
 
-    private function saveQueue(Device $device, array $queue): void
+    private function saveQueue(Billboard $billboard, array $queue): void
     {
-        $cacheKey = "device:{$device->id}:queue";
+        $cacheKey = "billboard:{$billboard->id}:queue";
         Cache::put($cacheKey, $queue, now()->addDays(1));
     }
 
     /**
-     * Called when the device reports an asset as played.
+     * Called when the billboard reports an asset as played.
      * Removes the asset from the front of the cached timeline queue so it doesn't pile up.
      */
-    public function consumePlayedAsset(Device $device, string $assetId, bool $wasOverride = false): void
+    public function consumePlayedAsset(Billboard $billboard, string $assetId, bool $wasOverride = false): void
     {
-        $cacheKey = "device:{$device->id}:queue";
+        $cacheKey = "billboard:{$billboard->id}:queue";
         $queue = Cache::get($cacheKey, []);
 
         if (empty($queue)) {
@@ -173,7 +173,7 @@ class QueueGenerationService
                     // Normal plays mean the player skipped any items before this one.
                     array_splice($queue, 0, $index + 1);
                 }
-                $this->saveQueue($device, $queue);
+                $this->saveQueue($billboard, $queue);
                 return;
             }
         }
@@ -187,14 +187,14 @@ class QueueGenerationService
                 } else {
                     array_splice($queue, 0, $index + 1);
                 }
-                $this->saveQueue($device, $queue);
+                $this->saveQueue($billboard, $queue);
                 return;
             }
         }
     }
 
     private function generateNextSequence(
-        Device $device,
+        Billboard $billboard,
         int $count,
         ?string $previousAssetId = null,
         array $projHourly = [],
@@ -202,11 +202,11 @@ class QueueGenerationService
         array $projLoopDaily = [],
         int $secondsPerSpot = 15
     ): array {
-        // Loops play in the operator-defined order (device.loop_orders); loops not
+        // Loops play in the operator-defined order (billboard.loop_orders); loops not
         // listed there fall to the end by creation order. Concatenating each loop's
         // assets (in order_index) into one flat list and walking it sequentially
         // gives "finish a loop before advancing to the next" by construction.
-        $loopOrder = collect($device->loop_orders ?? [])->flip(); // loop_id => position
+        $loopOrder = collect($billboard->loop_orders ?? [])->flip(); // loop_id => position
         $byLoopOrder = fn (Collection $loops) => $loops->sortBy([
             fn (MediaLoop $loop) => $loopOrder[$loop->id] ?? PHP_INT_MAX,
             fn (MediaLoop $loop) => $loop->created_at,
@@ -223,7 +223,7 @@ class QueueGenerationService
         $masterPrimaryAssets = new Collection();
         foreach ($primaryLoops as $loop) {
             foreach ($loop->assets as $asset) {
-                if ($this->isAssignedToDevice($asset, $device)) {
+                if ($this->isAssignedToBillboard($asset, $billboard)) {
                     $masterPrimaryAssets->push($asset);
                 }
             }
@@ -240,7 +240,7 @@ class QueueGenerationService
         $masterFallbackAssets = new Collection();
         foreach ($fallbackLoops as $loop) {
             foreach ($loop->assets as $asset) {
-                if ($this->isAssignedToDevice($asset, $device)) {
+                if ($this->isAssignedToBillboard($asset, $billboard)) {
                     $masterFallbackAssets->push($asset);
                 }
             }
@@ -314,7 +314,7 @@ class QueueGenerationService
             if (!$selected) {
                 $anyWithSpots = MediaAsset::where('play_spots_remaining', '>', 0)
                     ->get()
-                    ->filter(fn($a) => $this->isAssignedToDevice($a, $device));
+                    ->filter(fn($a) => $this->isAssignedToBillboard($a, $billboard));
                 if ($anyWithSpots->isNotEmpty()) {
                     $selected = $anyWithSpots->random();
                 }
@@ -391,23 +391,23 @@ class QueueGenerationService
         return ($virtualMs - $last) >= self::PACING_FACTOR * $idealIntervalMs;
     }
 
-    private function isAssignedToDevice(MediaAsset $asset, Device $device): bool
+    private function isAssignedToBillboard(MediaAsset $asset, Billboard $billboard): bool
     {
-        // Asset-level: global assets are visible to all devices
+        // Asset-level: global assets are visible to all billboards
         if ($asset->is_global) {
             return true;
         }
         // Asset-level: per-billboard check
-        if (!empty($asset->assigned_devices) && !in_array($device->id, $asset->assigned_devices)) {
+        if (!empty($asset->assigned_billboards) && !in_array($billboard->id, $asset->assigned_billboards)) {
             return false;
         }
-        if (empty($asset->assigned_devices)) {
+        if (empty($asset->assigned_billboards)) {
             // Inherit from loop
             if ($asset->loop && $asset->loop->is_global) {
                 return true;
             }
-            if ($asset->loop && !empty($asset->loop->assigned_devices)) {
-                return in_array($device->id, $asset->loop->assigned_devices);
+            if ($asset->loop && !empty($asset->loop->assigned_billboards)) {
+                return in_array($billboard->id, $asset->loop->assigned_billboards);
             }
             // No assignment at all — not visible
             return false;

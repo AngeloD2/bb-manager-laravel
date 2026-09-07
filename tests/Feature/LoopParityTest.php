@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Models\PlaybackLog;
@@ -41,7 +41,7 @@ class LoopParityTest extends TestCase
             ]);
         }
 
-        $device = Device::create([
+        $billboard = Billboard::create([
             'name' => 'Parity Board',
             'loop_orders' => array_map(fn ($id) => $loops[$id]->id, $fixture['loopOrder']),
         ]);
@@ -65,7 +65,7 @@ class LoopParityTest extends TestCase
                 PlaybackLog::create([
                     'asset_id' => $asset->id,
                     'loop_id' => $asset->loop_id,
-                    'device_id' => $device->id,
+                    'billboard_id' => $billboard->id,
                     'client_event_id' => (string) Str::uuid(),
                     'spot_spent' => 1,
                     'was_override' => false,
@@ -74,7 +74,7 @@ class LoopParityTest extends TestCase
             }
         }
 
-        $queue = app(QueueGenerationService::class)->getUpcomingQueue($device, $fixture['picks']);
+        $queue = app(QueueGenerationService::class)->getUpcomingQueue($billboard, $fixture['picks']);
         $names = array_map(fn ($item) => $item['asset_name'], $queue);
 
         $this->assertSame($fixture['expected'], $names);

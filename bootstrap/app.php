@@ -14,13 +14,13 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // Register the device token guard alias
+        // Register the billboard token guard alias
         $middleware->alias([
-            'device.token' => \App\Http\Middleware\EnsureDeviceToken::class,
+            'billboard.token' => \App\Http\Middleware\EnsureBillboardToken::class,
             'admin.token'  => \App\Http\Middleware\EnsureAdminToken::class,
         ]);
 
-        // Sanctum: tell it that Device is a tokenable model
+        // Sanctum: tell it that Billboard is a tokenable model
         $middleware->statefulApi();
     })
     ->withExceptions(function (Exceptions $exceptions) {

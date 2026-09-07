@@ -16,7 +16,7 @@ class MediaLoopResource extends JsonResource
             'is_fallback'      => $this->is_fallback,
             'is_global'        => $this->is_global,
             'max_daily_spots' => $this->max_daily_spots,
-            'assigned_devices' => $this->assigned_devices,
+            'assigned_billboards' => $this->assigned_billboards,
             'time_blocks'      => $this->time_blocks,
             'assets_count'     => $this->whenCounted('assets'),
             'spots_spent_today' => $this->resource->spotsSpentToday(),

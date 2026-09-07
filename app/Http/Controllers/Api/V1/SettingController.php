@@ -27,7 +27,7 @@ class SettingController extends Controller
             );
         }
 
-        app(\App\Services\DeviceNotifier::class)->notifyScheduleChanged();
+        app(\App\Services\BillboardNotifier::class)->notifyScheduleChanged();
 
         return response()->json(['message' => 'Settings updated successfully']);
     }

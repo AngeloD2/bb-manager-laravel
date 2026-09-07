@@ -69,7 +69,7 @@ export function useSyncEngine({
     if (isOnline) flush();
   }, [isOnline, flush]);
 
-  // Periodic reconcile while reachable. Suspended while paused: a frozen device
+  // Periodic reconcile while reachable. Suspended while paused: a frozen billboard
   // gets an empty schedule from /sync, so reconciling mid-pause would wipe the
   // in-memory queue the player needs to resume instantly. Resume issues its own
   // refresh() to reconcile.

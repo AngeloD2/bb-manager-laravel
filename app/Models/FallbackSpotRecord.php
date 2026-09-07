@@ -12,16 +12,16 @@ class FallbackSpotRecord extends Model
     use HasUuids;
 
     protected $fillable = [
-        'device_id',
+        'billboard_id',
         'loop_id',
         'spot_date',
         'status',
         'campaign_id',
     ];
 
-    public function device(): BelongsTo
+    public function billboard(): BelongsTo
     {
-        return $this->belongsTo(Device::class);
+        return $this->belongsTo(Billboard::class);
     }
 
     public function loop(): BelongsTo

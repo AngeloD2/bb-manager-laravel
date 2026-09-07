@@ -126,10 +126,10 @@ class AssetProcessingJob implements ShouldQueue
 
             // The asset is only now is_synced=true with its final file_path, so it
             // only now appears in /sync (and any pending override for it becomes
-            // deliverable). Notify devices to re-sync so a media file added while a
+            // deliverable). Notify billboards to re-sync so a media file added while a
             // board is already playing starts within seconds instead of waiting for
             // the next poll — and without racing the transcode it just finished.
-            app(\App\Services\DeviceNotifier::class)->notifyScheduleChanged();
+            app(\App\Services\BillboardNotifier::class)->notifyScheduleChanged();
         } catch (\Throwable $e) {
             Log::error("AssetProcessingJob: failed", [
                 'asset_id' => $asset->id,
@@ -338,7 +338,7 @@ class AssetProcessingJob implements ShouldQueue
             }
 
             // Notify clients of the failure
-            app(\App\Services\DeviceNotifier::class)->notifyScheduleChanged();
+            app(\App\Services\BillboardNotifier::class)->notifyScheduleChanged();
         }
     }
 }

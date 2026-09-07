@@ -18,7 +18,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   const recordedRef = useRef(null); // guards against double-recording one play
 
   const [syncState, setSyncState] = useState(syncData);
-  const device = syncState?.device || {};
+  const billboard = syncState?.billboard || {};
   const { isOnline } = useConnectionStatus({ apiUrl, token });
 
   // Paused (a.k.a. "frozen") holds the current frame on screen without
@@ -26,7 +26,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   // cold-booted board comes up paused if it was paused. While paused the loop
   // is disabled (see `enabled` below) and background reconcile is suspended, so
   // resume is instant from the in-memory schedule with no refetch flash.
-  const [paused, setPaused] = useState(!!syncData?.device?.is_frozen);
+  const [paused, setPaused] = useState(!!syncData?.billboard?.is_frozen);
   const pausedRef = useRef(paused);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
 
@@ -98,7 +98,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     });
     // The server's persisted freeze flag is authoritative on a fresh snapshot
     // (covers cold boot and a freeze toggled from another admin client).
-    if (data?.device) setPaused(!!data.device.is_frozen);
+    if (data?.billboard) setPaused(!!data.billboard.is_frozen);
     setSyncState(data);
   }, [injectOverride]);
 
@@ -125,12 +125,12 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
       clearTimeout(imageTimerRef.current);
       if (videoRef.current) videoRef.current.pause();
       setPaused(true);
-      setSyncState((s) => (s?.device ? { ...s, device: { ...s.device, is_frozen: true } } : s));
+      setSyncState((s) => (s?.billboard ? { ...s, billboard: { ...s.billboard, is_frozen: true } } : s));
       return;
     }
     if (command === 'unfreeze' || command === 'resume') {
       setPaused(false); // re-enables the loop; it resumes from the in-memory schedule
-      setSyncState((s) => (s?.device ? { ...s, device: { ...s.device, is_frozen: false } } : s));
+      setSyncState((s) => (s?.billboard ? { ...s, billboard: { ...s.billboard, is_frozen: false } } : s));
       refresh();        // reconcile counters + repopulate the (previously frozen) schedule
       return;
     }
@@ -186,7 +186,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     refresh();
   }, [interrupt, refresh, cancelOverride, assetsById, injectOverride]);
 
-  usePusher({ deviceId: device.id, onCommand: handleCommand });
+  usePusher({ billboardId: billboard.id, onCommand: handleCommand });
 
   const stableKey = currentAsset && currentAsset.asset_id
     ? assetServeUrl(apiUrl, currentAsset.asset_id)
@@ -213,7 +213,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     );
   }, [currentAsset, syncState, apiUrl]);
 
-  const { src, resolvedKey, notCached, downloading } = useEdgeCache(stableKey, fetchUrl, device.offline_mode, token);
+  const { src, resolvedKey, notCached, downloading } = useEdgeCache(stableKey, fetchUrl, billboard.offline_mode, token);
 
   const isImage = currentAsset && IMAGE_TYPES.has(currentAsset.file_type);
   const [imageLoaded, setImageLoaded] = useState(false);

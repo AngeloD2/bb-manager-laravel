@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\MediaAssetResource;
 use App\Http\Resources\Api\V1\MediaLoopResource;
-use App\Services\DeviceSyncService;
+use App\Services\BillboardSyncService;
 use App\Services\SpotManagerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,21 +14,21 @@ use Illuminate\Support\Facades\Validator;
 /**
  * SyncController
  *
- * Handles the billboard device ↔ server communication:
+ * Handles the billboard ↔ server communication:
  *  GET  /api/v1/sync   — pull current state (loops, eligible assets, overrides)
  *  POST /api/v1/logs   — push bulk playback logs for spot deduction
  */
 class SyncController extends Controller
 {
     public function __construct(
-        private readonly DeviceSyncService   $syncService,
+        private readonly BillboardSyncService   $syncService,
         private readonly SpotManagerService $tokenManager
     ) {}
 
     /**
      * GET /api/v1/sync
      *
-     * Returns the full device payload:
+     * Returns the full billboard payload:
      *  - All loops
      *  - Eligible (constraint-passing) primary assets with delivery URLs
      *  - Fallback assets
@@ -36,17 +36,17 @@ class SyncController extends Controller
      */
     public function sync(Request $request): JsonResponse
     {
-        /** @var \App\Models\Device $device */
-        $device  = $request->user();
-        $payload = $this->syncService->buildPayload($device);
+        /** @var \App\Models\Billboard $billboard */
+        $billboard  = $request->user();
+        $payload = $this->syncService->buildPayload($billboard);
 
         return response()->json([
             'data' => [
-                'device'    => [
-                    'id'        => $device->id,
-                    'name'      => $device->name,
-                    'geo_zone'  => $device->geo_zone,
-                    'is_frozen' => (bool) $device->is_frozen,
+                'billboard'    => [
+                    'id'        => $billboard->id,
+                    'name'      => $billboard->name,
+                    'geo_zone'  => $billboard->geo_zone,
+                    'is_frozen' => (bool) $billboard->is_frozen,
                 ],
                 'loops'           => MediaLoopResource::collection($payload['loops']),
                 'eligible_assets'   => MediaAssetResource::collection($payload['eligible_assets']),
@@ -67,15 +67,15 @@ class SyncController extends Controller
     /**
      * GET /api/v1/sync/ping
      *
-     * Lightweight reachability probe. The device polls this to decide whether it
+     * Lightweight reachability probe. The billboard polls this to decide whether it
      * can flush its local log queue; `server_time` lets it correct clock skew on
-     * locally-stamped played_at values. Also refreshes the device heartbeat.
+     * locally-stamped played_at values. Also refreshes the billboard heartbeat.
      */
     public function ping(Request $request): JsonResponse
     {
-        /** @var \App\Models\Device $device */
-        $device = $request->user();
-        $device->heartbeat();
+        /** @var \App\Models\Billboard $billboard */
+        $billboard = $request->user();
+        $billboard->heartbeat();
 
         return response()->json([
             'ok'          => true,
@@ -86,7 +86,7 @@ class SyncController extends Controller
     /**
      * POST /api/v1/logs
      *
-     * Accepts a batch of playback log entries from a billboard device.
+     * Accepts a batch of playback log entries from a billboard.
      * Validates spot budgets and persists the accepted entries.
      *
      * Body: { "logs": [{ "asset_id": "...", "played_at": "ISO8601", "was_override": false }] }
@@ -105,14 +105,14 @@ class SyncController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        /** @var \App\Models\Device $device */
-        $device = $request->user();
+        /** @var \App\Models\Billboard $billboard */
+        $billboard = $request->user();
 
-        $result = $this->tokenManager->processBatch($device, $request->input('logs'));
+        $result = $this->tokenManager->processBatch($billboard, $request->input('logs'));
 
         return response()->json([
             'data'    => array_merge($result, [
-                'device_state' => $this->syncService->deviceSpotState($device),
+                'billboard_state' => $this->syncService->billboardSpotState($billboard),
             ]),
             'message' => "Batch processed: {$result['accepted']} accepted, {$result['rejected']} rejected.",
         ], 200);
@@ -121,8 +121,8 @@ class SyncController extends Controller
     /**
      * POST /api/v1/playback/start
      *
-     * Invoked by a billboard device to notify that it has started playing a media asset.
-     * Broadcasts the event to all listeners of the device's WebSocket channel.
+     * Invoked by a billboard to notify that it has started playing a media asset.
+     * Broadcasts the event to all listeners of the billboard's WebSocket channel.
      */
     public function reportPlaybackStart(Request $request): JsonResponse
     {
@@ -135,13 +135,13 @@ class SyncController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        /** @var \App\Models\Device $device */
-        $device = $request->user();
+        /** @var \App\Models\Billboard $billboard */
+        $billboard = $request->user();
         $asset  = \App\Models\MediaAsset::findOrFail($request->input('asset_id'));
 
         // Broadcast via Reverb/Pusher if configured
         try {
-            broadcast(new \App\Events\PlaybackStarted($device, $asset, $request->input('started_at')));
+            broadcast(new \App\Events\PlaybackStarted($billboard, $asset, $request->input('started_at')));
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('Broadcast failed: ' . $e->getMessage());
         }
@@ -149,7 +149,7 @@ class SyncController extends Controller
         return response()->json([
             'message' => "Playback event broadcasted.",
             'data'    => [
-                'device_id' => $device->id,
+                'billboard_id' => $billboard->id,
                 'asset_id'  => $asset->id,
                 'started_at'=> $request->input('started_at'),
             ],
@@ -159,17 +159,17 @@ class SyncController extends Controller
     /**
      * GET /api/v1/assets/{assetId}/serve
      *
-     * Sanctum-authenticated auth gate: validates device access then issues a
+     * Sanctum-authenticated auth gate: validates billboard access then issues a
      * 302 redirect to a short-lived presigned S3 URL. S3 delivers the bytes
-     * directly to the device; this route only pays the cost of a HeadObject
+     * directly to the billboard; this route only pays the cost of a HeadObject
      * check and redirect. The bucket must have a CORS policy allowing GET from
      * all origins so that the browser accepts the S3 response after following
      * the redirect.
      */
     public function serveAsset(Request $request, string $assetId): \Illuminate\Http\RedirectResponse|JsonResponse
     {
-        /** @var \App\Models\Device $device */
-        $device = $request->user();
+        /** @var \App\Models\Billboard $billboard */
+        $billboard = $request->user();
 
         $asset = \App\Models\MediaAsset::with('loop')->find($assetId);
 
@@ -177,7 +177,7 @@ class SyncController extends Controller
             return response()->json(['message' => 'Asset not found.'], 404);
         }
 
-        if (!$this->deviceCanAccessAsset($device, $asset)) {
+        if (!$this->billboardCanAccessAsset($billboard, $asset)) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -192,16 +192,16 @@ class SyncController extends Controller
         return redirect($presignedUrl, 302);
     }
 
-    private function deviceCanAccessAsset(\App\Models\Device $device, \App\Models\MediaAsset $asset): bool
+    private function billboardCanAccessAsset(\App\Models\Billboard $billboard, \App\Models\MediaAsset $asset): bool
     {
         if ($asset->is_global) return true;
         if ($asset->loop && $asset->loop->is_global) return true;
 
-        $hasAssetAssignment = !empty($asset->assigned_devices);
-        $hasLoopAssignment = $asset->loop && !empty($asset->loop->assigned_devices);
+        $hasAssetAssignment = !empty($asset->assigned_billboards);
+        $hasLoopAssignment = $asset->loop && !empty($asset->loop->assigned_billboards);
 
-        if ($hasAssetAssignment && in_array($device->id, $asset->assigned_devices)) return true;
-        if ($hasLoopAssignment && in_array($device->id, $asset->loop->assigned_devices)) return true;
+        if ($hasAssetAssignment && in_array($billboard->id, $asset->assigned_billboards)) return true;
+        if ($hasLoopAssignment && in_array($billboard->id, $asset->loop->assigned_billboards)) return true;
 
         if ($hasAssetAssignment || $hasLoopAssignment) {
             return false;
@@ -214,7 +214,7 @@ class SyncController extends Controller
      * GET /api/v1/assets/{asset}/download
      *
      * Returns a short-lived S3 presigned GET URL for local edge caching
-     * on the billboard device.
+     * on the billboard.
      */
     public function assetDownload(Request $request, string $assetId): JsonResponse
     {
@@ -236,10 +236,10 @@ class SyncController extends Controller
      */
     public function timeline(Request $request, \App\Services\QueueGenerationService $queueService): JsonResponse
     {
-        $deviceId = $request->query('device_id');
-        $device = \App\Models\Device::findOrFail($deviceId);
+        $billboardId = $request->query('billboard_id');
+        $billboard = \App\Models\Billboard::findOrFail($billboardId);
         
-        $queue = $queueService->getUpcomingQueue($device, 12);
+        $queue = $queueService->getUpcomingQueue($billboard, 12);
         
         return response()->json(['data' => $queue]);
     }

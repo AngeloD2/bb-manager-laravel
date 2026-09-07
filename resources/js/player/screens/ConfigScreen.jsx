@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { deviceLogin, sync } from "../api";
+import { billboardLogin, sync } from "../api";
 import { persistSession } from "../lib/session";
 
 const s = {
@@ -98,9 +98,9 @@ export default function ConfigScreen({ onConnected }) {
     setLoading(true);
     const trimmedPassword = password.trim();
     try {
-      const token = await deviceLogin(apiUrl, trimmedPassword);
+      const token = await billboardLogin(apiUrl, trimmedPassword);
       const data = await sync(apiUrl, token);
-      localStorage.setItem("bb_device_token", token);
+      localStorage.setItem("bb_billboard_token", token);
       // Persist the full session so the board can cold-boot offline next time.
       await persistSession({ apiUrl, token, syncData: data });
       onConnected({ apiUrl, token, syncData: data });
