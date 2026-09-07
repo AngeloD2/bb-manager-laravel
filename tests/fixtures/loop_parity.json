@@ -1,5 +1,5 @@
 {
-  "_comment": "CANONICAL CROSS-ENGINE PARITY FIXTURE. Loaded by both the Laravel test (tests/Feature/LoopParityTest.php) and the React test (bb-manager-player-react/test/loop-parity.test.mjs). It pins the DETERMINISTIC loop rules — order (1), loop-completion (2), daily-cap exclusion (5) — so the duplicated PHP and JS rule logic cannot silently drift. Pacing (rule 4) is asserted per-engine because the two timing models (server virtual-clock batch vs. client event-driven) are not byte-identical by design. If you change an engine's ordering/completion/cap behavior, update this fixture in ONE place and both tests move together.",
+  "_comment": "CANONICAL CROSS-ENGINE PARITY FIXTURE. Loaded by both the Laravel test (tests/Feature/LoopParityTest.php) and the JS test (tests/js/loop-parity.test.mjs). It pins the DETERMINISTIC loop rules — order (1), loop-completion (2), daily-cap exclusion (5) — so the duplicated PHP and JS rule logic cannot silently drift. Pacing (rule 4) is asserted per-engine because the two timing models (server virtual-clock batch vs. client event-driven) are not byte-identical by design. If you change an engine's ordering/completion/cap behavior, update this fixture in ONE place and both tests move together.",
   "secondsPerSpot": 15,
   "loopOrder": ["B", "A"],
   "loops": [
