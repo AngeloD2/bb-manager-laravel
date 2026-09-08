@@ -335,6 +335,21 @@ class BillboardSyncTest extends TestCase
             ->assertJsonCount(0, 'data.standalone_assets');
     }
 
+    /** @test */
+    public function the_billboard_object_carries_no_zone(): void
+    {
+        $this->actAsBillboard();
+
+        $billboard = $this->getJson('/api/v1/sync')->assertOk()->json('data.billboard');
+
+        // Zone targeting is enforced server-side at sync; the player is
+        // deliberately zone-unaware. Asserted by key, not by structure: a
+        // structure assertion passed happily while this key was present but
+        // permanently null after the geo_zone column was dropped.
+        $this->assertSame(['id', 'name', 'is_frozen'], array_keys($billboard));
+        $this->assertArrayNotHasKey('geo_zone', $billboard);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function actAsBillboard(): void
