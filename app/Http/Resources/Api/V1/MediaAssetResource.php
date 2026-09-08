@@ -19,7 +19,7 @@ class MediaAssetResource extends JsonResource
             'order_index'           => $this->order_index,
             'size_bytes'            => $this->size_bytes,
             'duration_secs'         => $this->duration_secs,
-            'geo_campaign'          => $this->geo_campaign,
+            'targeted_zones'          => $this->targeted_zones,
             'is_synced'             => $this->is_synced,
             'sync_error'            => $this->sync_error,
             'is_global'             => $this->is_global,

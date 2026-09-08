@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AssetController;
 use App\Http\Controllers\Api\V1\CampaignController;
+use App\Http\Controllers\Api\V1\ZoneController;
 use App\Http\Controllers\Api\V1\BillboardController;
 use App\Http\Controllers\Api\V1\LoopController;
 use App\Http\Controllers\Api\V1\OverrideController;
@@ -71,6 +72,7 @@ Route::prefix('v1')->group(function () {
 
         // Billboards (board provisioning)
         Route::apiResource('campaigns', CampaignController::class)->only(['index', 'store', 'update', 'destroy']);
+        Route::apiResource('zones', ZoneController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::apiResource('billboards', BillboardController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::get('billboards/{billboard}/fallback-spots', [FallbackSpotController::class, 'index'])->name('billboards.fallback-spots.index');
         Route::get('billboards/{billboard}/schedule', [BillboardController::class, 'schedule'])->name('billboards.schedule');
