@@ -93,7 +93,7 @@ class AssetController extends Controller
 
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new MediaAssetResource($asset->load(['loop', 'conflicts'])), 201);
+        return (new MediaAssetResource($asset->load(['loop', 'conflicts'])))->response()->setStatusCode(201);
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ class AssetController extends Controller
 
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new MediaAssetResource($asset->fresh(['loop', 'conflicts'])));
+        return (new MediaAssetResource($asset->fresh(['loop', 'conflicts'])))->response();
     }
 
     // ── Delete ────────────────────────────────────────────────────────────────
@@ -278,7 +278,7 @@ class AssetController extends Controller
 
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new MediaAssetResource($asset->load(['loop', 'conflicts'])), 201);
+        return (new MediaAssetResource($asset->load(['loop', 'conflicts'])))->response()->setStatusCode(201);
     }
 
     /**

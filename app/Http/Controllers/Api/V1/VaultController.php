@@ -7,6 +7,7 @@ use App\Http\Resources\Api\V1\SecureShareLinkResource;
 use App\Models\MediaAsset;
 use App\Models\SecureShareLink;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 
@@ -24,13 +25,13 @@ class VaultController extends Controller
 {
     // ── Admin: list ───────────────────────────────────────────────────────────
 
-    public function index(): JsonResponse
+    public function index(): AnonymousResourceCollection
     {
         $links = SecureShareLink::with(['loop', 'asset'])
             ->latest()
             ->get();
 
-        return response()->json(SecureShareLinkResource::collection($links));
+        return SecureShareLinkResource::collection($links);
     }
 
     // ── Admin: create link ────────────────────────────────────────────────────
