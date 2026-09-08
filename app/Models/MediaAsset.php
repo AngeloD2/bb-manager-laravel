@@ -30,7 +30,7 @@ class MediaAsset extends Model
         'max_plays_per_hour',
         'max_daily_plays',
         'play_spots_remaining',
-        'assigned_devices',
+        'assigned_billboards',
         'campaign_start_date',
         'campaign_end_date',
         'playback_times',
@@ -45,7 +45,7 @@ class MediaAsset extends Model
         'max_plays_per_hour'    => 'integer',
         'max_daily_plays'       => 'integer',
         'play_spots_remaining'  => 'integer',
-        'assigned_devices'      => 'array',
+        'assigned_billboards'      => 'array',
         'campaign_start_date'   => 'date:Y-m-d',
         'campaign_end_date'     => 'date:Y-m-d',
         'playback_times'        => 'array',
@@ -73,7 +73,7 @@ class MediaAsset extends Model
 
     /**
      * Generates a CloudFront-signed or S3 presigned URL for CDN delivery
-     * to the physical billboard device.
+     * to the physical billboard.
      */
     public function deliveryUrl(int $expirySeconds = 3600): string
     {
@@ -115,7 +115,7 @@ class MediaAsset extends Model
 
     /**
      * Server-stamped timestamp of the most recent play, or null if never played.
-     * Devices use this to space out plays (pacing) after a cold sync, when they
+     * Billboards use this to space out plays (pacing) after a cold sync, when they
      * only have the snapshot and not their own local play history yet.
      */
     public function lastPlayedAt(): ?string

@@ -2,13 +2,13 @@
 
 namespace Database\Seeders;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use Illuminate\Database\Seeder;
 
 /**
- * DemoSeeder — Seeds demo loops, assets, and devices for local development.
+ * DemoSeeder — Seeds demo loops, assets, and billboards for local development.
  *
  * Run manually with:  php artisan db:seed --class=DemoSeeder
  * NOT called by DatabaseSeeder — production databases start clean.
@@ -98,31 +98,31 @@ class DemoSeeder extends Seeder
             ],
         ]);
 
-        // ── Devices ───────────────────────────────────────────────────────────
+        // ── Billboards ──────────────────────────────────────────────────────
 
-        $boardAlpha = Device::create([
+        $boardAlpha = Billboard::create([
             'name'     => 'Board Alpha — Downtown Core',
             'location' => 'Main St & 5th Ave',
             'geo_zone' => 'Downtown Core',
         ]);
 
-        $boardBeta = Device::create([
+        $boardBeta = Billboard::create([
             'name'     => 'Board Beta — Highway 1',
             'location' => 'I-5 North Exit 42',
             'geo_zone' => 'West Coast Highways',
         ]);
 
         // Provision Sanctum tokens and print them (dev only)
-        $tokenAlpha = $boardAlpha->createToken('device-alpha', ['device:sync', 'device:log'])->plainTextToken;
-        $tokenBeta  = $boardBeta->createToken('device-beta',  ['device:sync', 'device:log'])->plainTextToken;
+        $tokenAlpha = $boardAlpha->createToken('billboard-alpha', ['billboard:sync', 'billboard:log'])->plainTextToken;
+        $tokenBeta  = $boardBeta->createToken('billboard-beta',  ['billboard:sync', 'billboard:log'])->plainTextToken;
 
         $this->command->info('');
-        $this->command->info('┌─────────────────────────────────────────────────────────────┐');
-        $this->command->info('│  BCC — Seeded Device Tokens (store these securely on boards) │');
-        $this->command->info('├─────────────────────────────────────────────────────────────┤');
+        $this->command->info('┌───────────────────────────────────────────────────────────────┐');
+        $this->command->info('│  BCC — Seeded Billboard Tokens (store these securely on boards) │');
+        $this->command->info('├───────────────────────────────────────────────────────────────┤');
         $this->command->info("│  Board Alpha: {$tokenAlpha}");
         $this->command->info("│  Board Beta:  {$tokenBeta}");
-        $this->command->info('└─────────────────────────────────────────────────────────────┘');
+        $this->command->info('└───────────────────────────────────────────────────────────────┘');
         $this->command->info('');
     }
 }

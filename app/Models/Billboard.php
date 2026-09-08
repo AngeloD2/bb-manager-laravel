@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Crypt;
 use Laravel\Sanctum\HasApiTokens;
 
-class Device extends Model
+class Billboard extends Model
 {
     use HasUuids, HasApiTokens;
 
@@ -56,7 +56,7 @@ class Device extends Model
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    /** Mark this device as recently seen and online. */
+    /** Mark this billboard as recently seen and online. */
     public function heartbeat(): void
     {
         $this->update([
@@ -71,7 +71,7 @@ class Device extends Model
         return $this->overrides()->where('consumed', false)->orderBy('created_at');
     }
 
-    /** Set the device's timezone, falling back to application timezone or UTC if null. */
+    /** Set the billboard's timezone, falling back to application timezone or UTC if null. */
     public function setTimezoneAttribute($value): void
     {
         $this->attributes['timezone'] = $value ?? config('app.timezone', 'UTC');

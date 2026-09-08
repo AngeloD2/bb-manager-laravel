@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\MediaAsset;
-use App\Services\DeviceNotifier;
+use App\Services\BillboardNotifier;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -22,7 +22,7 @@ class CleanupFailedAssets extends Command
 
     protected $description = 'Delete media assets whose optimization/conversion failed (S3 object + record).';
 
-    public function handle(DeviceNotifier $notifier): int
+    public function handle(BillboardNotifier $notifier): int
     {
         $failed = MediaAsset::whereNotNull('sync_error')
             ->where('is_synced', false)

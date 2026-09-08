@@ -1,7 +1,7 @@
 import { metaGet, metaSet, metaDel } from "./db";
 
-// The device session that lets the board cold-boot and play offline: the API
-// base, the device token, and the last /sync snapshot (which carries the
+// The billboard session that lets the board cold-boot and play offline: the API
+// base, the billboard token, and the last /sync snapshot (which carries the
 // schedule + quota the scheduler runs on).
 const SESSION_KEY = "session";
 

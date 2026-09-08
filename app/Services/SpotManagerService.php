@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\PlaybackLog;
 use App\Models\Setting;
@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Log;
 /**
  * SpotManagerService
  *
- * Processes bulk PlaybackLog submissions from billboard devices.
+ * Processes bulk PlaybackLog submissions from billboards.
  * Validates each entry against the spot budget, deducts spots with
  * a DB-level lock to handle concurrent billboard reporting safely,
  * and persists audit logs.
@@ -25,20 +25,20 @@ class SpotManagerService
     ) {}
 
     /**
-     * Process a batch of raw log entries sent by a billboard device.
+     * Process a batch of raw log entries sent by a billboard.
      *
      * Each entry carries a client-generated `client_event_id` so retries over a
      * flaky link are deduped and never double-charge a spot. The per-entry
-     * `results` let the device confirm exactly which queued events the server
+     * `results` let the billboard confirm exactly which queued events the server
      * has durably accounted for. `accepted`/`rejected` totals are retained for
      * backward compatibility (a duplicate counts as accepted — it is already on
      * the books).
      *
-     * @param  Device  $device
+     * @param  Billboard  $billboard
      * @param  array<int, array{asset_id: string, played_at: string, was_override?: bool, client_event_id?: string}>  $entries
      * @return array{accepted: int, rejected: int, errors: array<string>, results: array<int, array{client_event_id: ?string, status: string, reason?: string}>}
      */
-    public function processBatch(Device $device, array $entries): array
+    public function processBatch(Billboard $billboard, array $entries): array
     {
         $accepted = 0;
         $rejected = 0;
@@ -52,7 +52,7 @@ class SpotManagerService
             $eventId = $entry['client_event_id'] ?? null;
 
             try {
-                $status = $this->processEntry($device, $entry, $secondsPerSpot);
+                $status = $this->processEntry($billboard, $entry, $secondsPerSpot);
                 $status === 'rejected' ? $rejected++ : $accepted++;
                 $results[] = ['client_event_id' => $eventId, 'status' => $status];
             } catch (\Throwable $e) {
@@ -60,7 +60,7 @@ class SpotManagerService
                 $errors[]  = "asset_id={$entry['asset_id']}: {$e->getMessage()}";
                 $results[] = ['client_event_id' => $eventId, 'status' => 'rejected', 'reason' => $e->getMessage()];
                 Log::warning('SpotManagerService: entry rejected', [
-                    'device_id' => $device->id,
+                    'billboard_id' => $billboard->id,
                     'entry'     => $entry,
                     'error'     => $e->getMessage(),
                 ]);
@@ -77,18 +77,18 @@ class SpotManagerService
      * @return string  'new' (counted now), 'duplicate' (already on the books),
      *                 or 'rejected' (failed a constraint).
      */
-    private function processEntry(Device $device, array $entry, int $secondsPerSpot): string
+    private function processEntry(Billboard $billboard, array $entry, int $secondsPerSpot): string
     {
         $eventId = $entry['client_event_id'] ?? null;
 
         // Idempotency gate: a known key was already charged on a prior flush.
-        if ($eventId !== null && PlaybackLog::where('device_id', $device->id)
+        if ($eventId !== null && PlaybackLog::where('billboard_id', $billboard->id)
                 ->where('client_event_id', $eventId)->exists()) {
             return 'duplicate';
         }
 
         try {
-            return $this->insertEntry($device, $entry, $eventId, $secondsPerSpot);
+            return $this->insertEntry($billboard, $entry, $eventId, $secondsPerSpot);
         } catch (DuplicateEventException) {
             // A concurrent flush of the same key won the race; the deduction was
             // rolled back with the transaction, so report it as already counted.
@@ -101,9 +101,9 @@ class SpotManagerService
      *
      * @return string  'new' or 'rejected'.
      */
-    private function insertEntry(Device $device, array $entry, ?string $eventId, int $secondsPerSpot): string
+    private function insertEntry(Billboard $billboard, array $entry, ?string $eventId, int $secondsPerSpot): string
     {
-        return DB::transaction(function () use ($device, $entry, $eventId, $secondsPerSpot): string {
+        return DB::transaction(function () use ($billboard, $entry, $eventId, $secondsPerSpot): string {
             /** @var MediaAsset|null $asset */
             $asset = MediaAsset::lockForUpdate()->find($entry['asset_id']);
 
@@ -130,7 +130,7 @@ class SpotManagerService
                 PlaybackLog::create([
                     'asset_id'        => $asset->id,
                     'loop_id'         => $asset->loop_id,
-                    'device_id'       => $device->id,
+                    'billboard_id'       => $billboard->id,
                     'client_event_id' => $eventId,
                     // Charge the loop/board budget by airtime: a long clip spends several slots.
                     'spot_spent'      => $asset->spotFootprint($secondsPerSpot),
@@ -145,7 +145,7 @@ class SpotManagerService
 
             // Remove the played asset from the server's generated timeline queue
             app(\App\Services\QueueGenerationService::class)
-                ->consumePlayedAsset($device, $asset->id, $entry['was_override'] ?? false);
+                ->consumePlayedAsset($billboard, $asset->id, $entry['was_override'] ?? false);
 
             return 'new';
         });

@@ -10,7 +10,7 @@ use App\Models\MediaLoop;
  *
  * Mirrors the TypeScript ConstraintValidationService in the Expo app, but
  * performs live DB queries instead of filtering in-memory arrays.
- * Called by DeviceSyncService and SpotManagerService.
+ * Called by BillboardSyncService and SpotManagerService.
  */
 class ConstraintValidationService
 {

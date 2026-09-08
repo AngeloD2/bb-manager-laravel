@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Models\TimelineOverride;
@@ -12,17 +12,17 @@ use Tests\TestCase;
 use Illuminate\Support\Facades\Event;
 use App\Events\PlaybackStarted;
 
-class DeviceSyncTest extends TestCase
+class BillboardSyncTest extends TestCase
 {
     use RefreshDatabase;
 
-    private Device $device;
+    private Billboard $billboard;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->device = Device::create([
+        $this->billboard = Billboard::create([
             'name'     => 'Board Alpha',
             'location' => 'Main Street & 5th',
             'geo_zone' => 'Downtown Core',
@@ -38,10 +38,10 @@ class DeviceSyncTest extends TestCase
     }
 
     /** @test */
-    public function non_device_token_returns_401(): void
+    public function non_billboard_token_returns_401(): void
     {
         // Token with wrong ability
-        $token = $this->device->createToken('admin-token', ['admin:all'])->plainTextToken;
+        $token = $this->billboard->createToken('admin-token', ['admin:all'])->plainTextToken;
 
         $this->withToken($token)->getJson('/api/v1/sync')->assertStatus(403);
     }
@@ -51,7 +51,7 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function sync_returns_folders_and_eligible_assets(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'is_global' => true]);
         MediaAsset::create([
@@ -64,7 +64,7 @@ class DeviceSyncTest extends TestCase
             ->assertOk()
             ->assertJsonStructure([
                 'data' => [
-                    'device',
+                    'billboard',
                     'loops',
                     'eligible_assets',
                     'fallback_assets',
@@ -79,7 +79,7 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function exhausted_assets_are_excluded_from_eligible_assets(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $loop = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'is_global' => true]);
         MediaAsset::create([
@@ -96,7 +96,7 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function fallback_assets_appear_in_fallback_collection(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $fallback = MediaLoop::create(['name' => 'Filler', 'is_fallback' => true, 'is_global' => true]);
         MediaAsset::create([
@@ -116,12 +116,12 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function pending_overrides_are_delivered_then_marked_consumed(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $asset    = $this->makeSyncedAsset();
         $override = TimelineOverride::create([
             'asset_id'  => $asset->id,
-            'device_id' => $this->device->id,
+            'billboard_id' => $this->billboard->id,
             'consumed'  => false,
         ]);
 
@@ -138,10 +138,10 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function consumed_overrides_are_not_redelivered_on_subsequent_sync(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $asset = $this->makeSyncedAsset();
-        TimelineOverride::create(['asset_id' => $asset->id, 'device_id' => $this->device->id, 'consumed' => true]);
+        TimelineOverride::create(['asset_id' => $asset->id, 'billboard_id' => $this->billboard->id, 'consumed' => true]);
 
         $this->getJson('/api/v1/sync')
             ->assertOk()
@@ -151,34 +151,34 @@ class DeviceSyncTest extends TestCase
     // ── Heartbeat ─────────────────────────────────────────────────────────────
 
     /** @test */
-    public function device_token_must_have_sync_ability(): void
+    public function billboard_token_must_have_sync_ability(): void
     {
-        $token = $this->device->createToken('board', ['device:log'])->plainTextToken; // Wrong ability
+        $token = $this->billboard->createToken('board', ['billboard:log'])->plainTextToken; // Wrong ability
 
         $this->withToken($token)->getJson('/api/v1/sync')
              ->assertStatus(403)
-             ->assertJsonPath('message', 'Token missing ability: device:sync');
+             ->assertJsonPath('message', 'Token missing ability: billboard:sync');
     }
 
     /** @test */
-    public function sync_updates_device_last_seen_at(): void
+    public function sync_updates_billboard_last_seen_at(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
-        $this->assertNull($this->device->last_seen_at);
+        $this->assertNull($this->billboard->last_seen_at);
 
         $this->getJson('/api/v1/sync')->assertOk();
 
-        $this->assertNotNull($this->device->fresh()->last_seen_at);
-        $this->assertTrue($this->device->fresh()->is_online);
+        $this->assertNotNull($this->billboard->fresh()->last_seen_at);
+        $this->assertTrue($this->billboard->fresh()->is_online);
     }
 
     /** @test */
-    public function sync_excludes_loops_and_assets_not_assigned_to_this_device(): void
+    public function sync_excludes_loops_and_assets_not_assigned_to_this_billboard(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
-        // Non-global loop with no device assignments
+        // Non-global loop with no billboard assignments
         $otherLoop1 = MediaLoop::create(['name' => 'Other Promo', 'is_fallback' => false, 'is_global' => false]);
         MediaAsset::create([
             'name' => 'Other Nike Ad', 'file_path' => 'media/other-nike.mp4', 'file_type' => 'VIDEO',
@@ -186,21 +186,21 @@ class DeviceSyncTest extends TestCase
             'is_synced' => true, 'play_spots_remaining' => 50,
         ]);
 
-        // Non-global loop assigned to a different device
-        $otherDevice = Device::create([
+        // Non-global loop assigned to a different billboard
+        $otherBillboard = Billboard::create([
             'name'     => 'Board Beta',
             'location' => 'Highway 1',
             'geo_zone' => 'West Coast Highways',
         ]);
-        $otherLoop2 = MediaLoop::create(['name' => 'Beta Promo', 'is_fallback' => false, 'is_global' => false, 'assigned_devices' => [$otherDevice->id]]);
+        $otherLoop2 = MediaLoop::create(['name' => 'Beta Promo', 'is_fallback' => false, 'is_global' => false, 'assigned_billboards' => [$otherBillboard->id]]);
         MediaAsset::create([
             'name' => 'Beta Nike Ad', 'file_path' => 'media/beta-nike.mp4', 'file_type' => 'VIDEO',
             'loop_id' => $otherLoop2->id, 'size_bytes' => 1000, 'duration_secs' => 10,
             'is_synced' => true, 'play_spots_remaining' => 50,
         ]);
 
-        // Non-global loop explicitly assigned to this device
-        $myLoop = MediaLoop::create(['name' => 'My Promo', 'is_fallback' => false, 'is_global' => false, 'assigned_devices' => [$this->device->id]]);
+        // Non-global loop explicitly assigned to this billboard
+        $myLoop = MediaLoop::create(['name' => 'My Promo', 'is_fallback' => false, 'is_global' => false, 'assigned_billboards' => [$this->billboard->id]]);
         MediaAsset::create([
             'name' => 'My Nike Ad', 'file_path' => 'media/my-nike.mp4', 'file_type' => 'VIDEO',
             'loop_id' => $myLoop->id, 'size_bytes' => 1000, 'duration_secs' => 10,
@@ -220,7 +220,7 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function sync_includes_prebaked_schedule_and_quota(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $loop  = MediaLoop::create(['name' => 'Promo', 'is_fallback' => false, 'is_global' => true, 'max_daily_spots' => 50]);
         $asset = MediaAsset::create([
@@ -234,7 +234,7 @@ class DeviceSyncTest extends TestCase
             ->assertJsonStructure([
                 'data' => [
                     'schedule' => ['primary', 'fallback'],
-                    'quota'    => ['as_of', 'seconds_per_spot', 'device', 'assets', 'loops'],
+                    'quota'    => ['as_of', 'seconds_per_spot', 'billboard', 'assets', 'loops'],
                 ],
             ]);
 
@@ -246,7 +246,7 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function ping_returns_ok_and_server_time(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
         $this->getJson('/api/v1/sync/ping')
             ->assertOk()
@@ -257,9 +257,9 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function sync_returns_standalone_assets(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
-        // Standalone asset assigned to this device
+        // Standalone asset assigned to this billboard
         $standaloneAssigned = MediaAsset::create([
             'name'                  => 'Standalone Assigned',
             'file_path'             => 'media/sa.mp4',
@@ -268,7 +268,7 @@ class DeviceSyncTest extends TestCase
             'size_bytes'            => 1000,
             'duration_secs'         => 10,
             'is_synced'             => true,
-            'assigned_devices'      => [$this->device->id],
+            'assigned_billboards'      => [$this->billboard->id],
             'play_spots_remaining'  => 50,
         ]);
 
@@ -295,15 +295,15 @@ class DeviceSyncTest extends TestCase
     /** @test */
     public function sync_excludes_unassigned_standalone_assets(): void
     {
-        $this->actAsDevice();
+        $this->actAsBillboard();
 
-        $otherDevice = Device::create([
+        $otherBillboard = Billboard::create([
             'name'     => 'Board Beta',
             'location' => 'Highway 1',
             'geo_zone' => 'West Coast Highways',
         ]);
 
-        // Standalone asset assigned to another device
+        // Standalone asset assigned to another billboard
         MediaAsset::create([
             'name'                  => 'Standalone Other',
             'file_path'             => 'media/so.mp4',
@@ -312,11 +312,11 @@ class DeviceSyncTest extends TestCase
             'size_bytes'            => 1000,
             'duration_secs'         => 10,
             'is_synced'             => true,
-            'assigned_devices'      => [$otherDevice->id],
+            'assigned_billboards'      => [$otherBillboard->id],
             'play_spots_remaining'  => 50,
         ]);
 
-        // Standalone asset not assigned to any device (not global)
+        // Standalone asset not assigned to any billboard (not global)
         MediaAsset::create([
             'name'                  => 'Standalone Unassigned',
             'file_path'             => 'media/su.mp4',
@@ -326,7 +326,7 @@ class DeviceSyncTest extends TestCase
             'duration_secs'         => 10,
             'is_synced'             => true,
             'is_global'             => false,
-            'assigned_devices'      => null,
+            'assigned_billboards'      => null,
             'play_spots_remaining'  => 50,
         ]);
 
@@ -337,9 +337,9 @@ class DeviceSyncTest extends TestCase
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private function actAsDevice(): void
+    private function actAsBillboard(): void
     {
-        $token = $this->device->createToken('board', ['device:sync', 'device:log'])->plainTextToken;
+        $token = $this->billboard->createToken('board', ['billboard:sync', 'billboard:log'])->plainTextToken;
         $this->withToken($token);
     }
 
@@ -360,11 +360,11 @@ class DeviceSyncTest extends TestCase
     }
 
     /** @test */
-    public function device_can_report_playback_start(): void
+    public function billboard_can_report_playback_start(): void
     {
         Event::fake();
 
-        $this->actAsDevice();
+        $this->actAsBillboard();
         $asset = $this->makeSyncedAsset();
         $startedAt = now()->toIso8601String();
 
@@ -376,7 +376,7 @@ class DeviceSyncTest extends TestCase
             ->assertJsonStructure([
                 'message',
                 'data' => [
-                    'device_id',
+                    'billboard_id',
                     'asset_id',
                     'started_at',
                 ],
@@ -386,7 +386,7 @@ class DeviceSyncTest extends TestCase
             PlaybackStarted::class,
             function (PlaybackStarted $event) use ($asset, $startedAt) {
                 return $event->asset->id === $asset->id &&
-                       $event->device->id === $this->device->id &&
+                       $event->billboard->id === $this->billboard->id &&
                        $event->startedAt === $startedAt;
             }
         );

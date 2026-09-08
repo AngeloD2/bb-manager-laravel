@@ -2,7 +2,7 @@
 
 namespace App\Events;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\TimelineOverride;
 use Illuminate\Broadcasting\Channel;
@@ -16,10 +16,10 @@ use Illuminate\Queue\SerializesModels;
  * OverrideDispatched
  *
  * Broadcast via Laravel Reverb (WebSocket) to instantly notify a billboard
- * device that a Play Next override has been queued, rather than waiting for
+ * billboard that a Play Next override has been queued, rather than waiting for
  * the next polling cycle.
  *
- * Channel: private-device.{device_id}
+ * Channel: private-billboard.{billboard_id}
  */
 class OverrideDispatched implements ShouldBroadcast
 {
@@ -28,13 +28,13 @@ class OverrideDispatched implements ShouldBroadcast
     public function __construct(
         public readonly TimelineOverride $override,
         public readonly MediaAsset       $asset,
-        public readonly Device           $device
+        public readonly Billboard        $billboard
     ) {}
 
     public function broadcastOn(): array
     {
-        // Private channel scoped to the specific billboard device
-        return [new PrivateChannel("device.{$this->device->id}")];
+        // Private channel scoped to the specific billboard
+        return [new PrivateChannel("billboard.{$this->billboard->id}")];
     }
 
     public function broadcastAs(): string

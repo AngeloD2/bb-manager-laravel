@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\MediaLoopResource;
 use App\Models\MediaLoop;
-use App\Services\DeviceNotifier;
+use App\Services\BillboardNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -23,7 +23,7 @@ use Illuminate\Validation\Rule;
  */
 class LoopController extends Controller
 {
-    public function __construct(private DeviceNotifier $notifier) {}
+    public function __construct(private BillboardNotifier $notifier) {}
 
     public function index(): AnonymousResourceCollection
     {
@@ -42,7 +42,7 @@ class LoopController extends Controller
             'is_fallback'      => ['boolean'],
             'is_global'        => ['boolean'],
             'max_daily_spots' => ['nullable', 'integer', 'min:1', 'max:99999'],
-            'assigned_devices' => ['nullable', 'array'],
+            'assigned_billboards' => ['nullable', 'array'],
         ]);
 
         $loop = MediaLoop::create($data);
@@ -60,7 +60,7 @@ class LoopController extends Controller
             'is_fallback'      => ['sometimes', 'boolean'],
             'is_global'        => ['sometimes', 'boolean'],
             'max_daily_spots' => ['nullable', 'integer', 'min:1', 'max:99999'],
-            'assigned_devices' => ['nullable', 'array'],
+            'assigned_billboards' => ['nullable', 'array'],
         ]);
 
         $loop->update($data);

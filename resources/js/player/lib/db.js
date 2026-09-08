@@ -1,7 +1,7 @@
 // Offline-first persistence for the decoupled-brain player.
 //
 // Two logical stores:
-//   • meta      — key/value blobs: the device session, the pre-baked schedule,
+//   • meta      — key/value blobs: the billboard session, the pre-baked schedule,
 //                 and the quota snapshot. Survives power-cycle so the board can
 //                 cold-boot and play with no network.
 //   • log_queue — append-only play events keyed by a client-generated UUID.

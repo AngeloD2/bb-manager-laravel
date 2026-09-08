@@ -3,7 +3,7 @@
 
 namespace App\Events;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
@@ -15,24 +15,24 @@ use Illuminate\Queue\SerializesModels;
  * PlaybackStarted
  *
  * Broadcast via Laravel Reverb (WebSocket) to notify the admin app
- * that a billboard device has started playing a media asset.
+ * that a billboard has started playing a media asset.
  *
- * Channel: device.{device_id}
+ * Channel: billboard.{billboard_id}
  */
 class PlaybackStarted implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     public function __construct(
-        public readonly Device     $device,
+        public readonly Billboard  $billboard,
         public readonly MediaAsset $asset,
         public readonly string     $startedAt
     ) {}
 
     public function broadcastOn(): array
     {
-        // Public channel scoped to the specific billboard device (UUID makes it unguessable)
-        return [new Channel("device.{$this->device->id}")];
+        // Public channel scoped to the specific billboard (UUID makes it unguessable)
+        return [new Channel("billboard.{$this->billboard->id}")];
     }
 
     public function broadcastAs(): string

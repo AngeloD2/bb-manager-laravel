@@ -12,7 +12,7 @@ use Illuminate\Validation\ValidationException;
 class AuthController extends Controller
 {
     /**
-     * Authenticate an admin user and return a Sanctum spot.
+     * Authenticate an admin user and return a Sanctum token.
      */
     public function login(Request $request): JsonResponse
     {
@@ -29,8 +29,8 @@ class AuthController extends Controller
             ]);
         }
 
-        // Generate Sanctum spot with 'admin' ability
-        $spot = $user->createToken("admin-{$user->id}", ['admin'])->plainTextToken;
+        // Generate Sanctum token with 'admin' ability
+        $token = $user->createToken("admin-{$user->id}", ['admin'])->plainTextToken;
 
         return response()->json([
             'data' => [
@@ -39,7 +39,7 @@ class AuthController extends Controller
                     'name'     => $user->name,
                     'username' => $user->username,
                 ],
-                'api_token' => $spot,
+                'api_token' => $token,
             ],
             'message' => 'Logged in successfully.',
         ]);

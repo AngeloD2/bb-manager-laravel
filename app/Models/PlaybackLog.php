@@ -18,7 +18,7 @@ class PlaybackLog extends Model
     protected $fillable = [
         'asset_id',
         'loop_id',
-        'device_id',
+        'billboard_id',
         'client_event_id',
         'spot_spent',
         'was_override',
@@ -38,8 +38,8 @@ class PlaybackLog extends Model
         return $this->belongsTo(MediaAsset::class, 'asset_id');
     }
 
-    public function device(): BelongsTo
+    public function billboard(): BelongsTo
     {
-        return $this->belongsTo(Device::class);
+        return $this->belongsTo(Billboard::class);
     }
 }

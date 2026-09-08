@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Models\PlaybackLog;
@@ -16,7 +16,7 @@ class SpotManagerServiceTest extends TestCase
     use RefreshDatabase;
 
     private SpotManagerService $service;
-    private Device $device;
+    private Billboard $billboard;
 
     protected function setUp(): void
     {
@@ -24,7 +24,7 @@ class SpotManagerServiceTest extends TestCase
 
         $this->service = app(SpotManagerService::class);
 
-        $this->device = Device::create([
+        $this->billboard = Billboard::create([
             'name'     => 'Test Board Alpha',
             'location' => 'Downtown Core',
             'geo_zone' => 'Downtown Core',
@@ -38,7 +38,7 @@ class SpotManagerServiceTest extends TestCase
     {
         $asset = $this->makeAsset(spots: 10);
 
-        $this->service->processBatch($this->device, [
+        $this->service->processBatch($this->billboard, [
             ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
         ]);
 
@@ -59,7 +59,7 @@ class SpotManagerServiceTest extends TestCase
             'was_override'=> false,
         ], range(1, 3));
 
-        $result = $this->service->processBatch($this->device, $entries);
+        $result = $this->service->processBatch($this->billboard, $entries);
 
         $this->assertEquals(3, $result['accepted']);
         $this->assertEquals(0, $result['rejected']);
@@ -73,7 +73,7 @@ class SpotManagerServiceTest extends TestCase
     {
         $asset = $this->makeAsset(spots: 0);
 
-        $result = $this->service->processBatch($this->device, [
+        $result = $this->service->processBatch($this->billboard, [
             ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
         ]);
 
@@ -91,11 +91,11 @@ class SpotManagerServiceTest extends TestCase
 
         // Log 2 plays in the past 30 minutes (within the hour window)
         PlaybackLog::insert([
-            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => null, 'device_id' => $this->device->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->subMinutes(30)],
-            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => null, 'device_id' => $this->device->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->subMinutes(15)],
+            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => null, 'billboard_id' => $this->billboard->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->subMinutes(30)],
+            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => null, 'billboard_id' => $this->billboard->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->subMinutes(15)],
         ]);
 
-        $result = $this->service->processBatch($this->device, [
+        $result = $this->service->processBatch($this->billboard, [
             ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
         ]);
 
@@ -113,11 +113,11 @@ class SpotManagerServiceTest extends TestCase
 
         // Simulate 2 plays already recorded today for this loop
         PlaybackLog::insert([
-            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => $loop->id, 'device_id' => $this->device->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->startOfDay()->addHour()],
-            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => $loop->id, 'device_id' => $this->device->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->startOfDay()->addHours(2)],
+            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => $loop->id, 'billboard_id' => $this->billboard->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->startOfDay()->addHour()],
+            ['id' => \Str::uuid(), 'asset_id' => $asset->id, 'loop_id' => $loop->id, 'billboard_id' => $this->billboard->id, 'spot_spent' => 1, 'was_override' => false, 'played_at' => now()->startOfDay()->addHours(2)],
         ]);
 
-        $result = $this->service->processBatch($this->device, [
+        $result = $this->service->processBatch($this->billboard, [
             ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
         ]);
 
@@ -133,7 +133,7 @@ class SpotManagerServiceTest extends TestCase
         $fallbackFolder = MediaLoop::create(['name' => 'Filler', 'is_fallback' => true]);
         $asset = $this->makeAsset(spots: 0, folderId: $fallbackFolder->id);
 
-        $result = $this->service->processBatch($this->device, [
+        $result = $this->service->processBatch($this->billboard, [
             ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
         ]);
 
@@ -149,7 +149,7 @@ class SpotManagerServiceTest extends TestCase
         $eligible  = $this->makeAsset(spots: 50);
         $exhausted = $this->makeAsset(spots: 0);
 
-        $result = $this->service->processBatch($this->device, [
+        $result = $this->service->processBatch($this->billboard, [
             ['asset_id' => $eligible->id,  'played_at' => now()->toIso8601String(), 'was_override' => false],
             ['asset_id' => $exhausted->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
         ]);
@@ -172,8 +172,8 @@ class SpotManagerServiceTest extends TestCase
             'was_override'    => false,
         ];
 
-        $first  = $this->service->processBatch($this->device, [$entry]);
-        $second = $this->service->processBatch($this->device, [$entry]);
+        $first  = $this->service->processBatch($this->billboard, [$entry]);
+        $second = $this->service->processBatch($this->billboard, [$entry]);
 
         $this->assertEquals('new', $first['results'][0]['status']);
         $this->assertEquals('duplicate', $second['results'][0]['status']);
@@ -192,7 +192,7 @@ class SpotManagerServiceTest extends TestCase
         $eligible  = $this->makeAsset(spots: 50);
         $exhausted = $this->makeAsset(spots: 0);
 
-        $result = $this->service->processBatch($this->device, [
+        $result = $this->service->processBatch($this->billboard, [
             ['asset_id' => $eligible->id,  'client_event_id' => (string) \Str::uuid(), 'played_at' => now()->toIso8601String()],
             ['asset_id' => $exhausted->id, 'client_event_id' => (string) \Str::uuid(), 'played_at' => now()->toIso8601String()],
         ]);

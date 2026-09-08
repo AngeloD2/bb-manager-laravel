@@ -12,7 +12,7 @@ Central source of truth for the React Native Expo billboard management app.
 |---------------|-----------------------------------------------|
 | Framework     | Laravel 11                                    |
 | Database      | PostgreSQL (MySQL-compatible with minor tweaks)|
-| Auth          | Laravel Sanctum — long-lived device tokens    |
+| Auth          | Laravel Sanctum — long-lived billboard tokens |
 | Queue         | Laravel database queue → upgrade to Redis/SQS |
 | WebSockets    | Laravel Reverb (optional; polling fallback)   |
 | Storage       | AWS S3 + KMS server-side encryption           |
@@ -30,7 +30,7 @@ Central source of truth for the React Native Expo billboard management app.
 - **Simplified Tracking**: Database and API structures favor aggregating slot consumption per loop/date rather than exposing verbose individual distinct slot listings.
 
 ### Vault & DB Simplification
-- **Geographic Zones Removed**: The concept of "Geographic Zones" was stripped from core models (`MediaAsset` and `Billboard`/devices), removing unnecessary filtering complexity.
+- **Geographic Zones Removed**: The concept of "Geographic Zones" was stripped from core models (`MediaAsset` and `Billboard`), removing unnecessary filtering complexity.
 - **Media Folders Hierarchy**: Self-referencing hierarchies (`parent_id`) were fixed in database migrations, correctly establishing foreign keys for robust loop-level structure.
 
 ---
@@ -52,7 +52,7 @@ createdb bb_manager          # PostgreSQL
 # 4. Run migrations
 php artisan migrate
 
-# 5. Seed sample data (creates folders, assets, and 2 device tokens)
+# 5. Seed sample data (creates loops, assets, and 2 billboard tokens)
 php artisan db:seed
 
 # 6. Start the server
@@ -69,7 +69,7 @@ php artisan reverb:start
 
 ## API Overview
 
-### Billboard Device Endpoints (Sanctum device token required)
+### Billboard Endpoints (Sanctum billboard token required)
 
 | Method | Endpoint                          | Description                                   |
 |--------|-----------------------------------|-----------------------------------------------|
@@ -81,9 +81,9 @@ php artisan reverb:start
 
 | Method | Endpoint                                  | Description                                      |
 |--------|-------------------------------------------|--------------------------------------------------|
-| GET    | `/api/v1/admin/devices`                   | List all billboard devices                       |
-| POST   | `/api/v1/admin/devices`                   | Provision a new device + return API token        |
-| DELETE | `/api/v1/admin/devices/{id}`              | Decommission device, revoke all tokens           |
+| GET    | `/api/v1/admin/billboards`                | List all billboards                              |
+| POST   | `/api/v1/admin/billboards`                | Provision a new billboard + return API token     |
+| DELETE | `/api/v1/admin/billboards/{id}`           | Decommission billboard, revoke all tokens        |
 | GET    | `/api/v1/admin/folders`                   | List folders                                     |
 | POST   | `/api/v1/admin/folders`                   | Create folder (with optional daily token cap)    |
 | PUT    | `/api/v1/admin/folders/{id}`              | Update folder                                    |
@@ -94,7 +94,7 @@ php artisan reverb:start
 | DELETE | `/api/v1/admin/assets/{id}`               | Soft delete + S3 cleanup                         |
 | POST   | `/api/v1/admin/assets/presigned-url`      | Get S3 PUT URL for direct upload                 |
 | POST   | `/api/v1/admin/assets/{id}/confirm`       | Confirm S3 upload → dispatch FFprobe job         |
-| POST   | `/api/v1/admin/overrides`                 | Push Play Next override to a device              |
+| POST   | `/api/v1/admin/overrides`                 | Push Play Next override to a billboard           |
 | GET    | `/api/v1/admin/vault/links`               | List active secure share links                   |
 | POST   | `/api/v1/admin/vault/links`               | Create ephemeral client proof link + PIN         |
 | DELETE | `/api/v1/admin/vault/links/{id}`          | Revoke a share link                              |
@@ -152,7 +152,7 @@ changes. `VITE_REVERB_*` interpolate from the `REVERB_*` values in the same
 `.env`.
 
 It remains a fully client-side, offline-first player: `lib/db.js` persists the
-device session, schedule and quota snapshot to IndexedDB so a board cold-boots
+billboard session, schedule and quota snapshot to IndexedDB so a board cold-boots
 and plays with no network, and `lib/scheduler.js` meters spots locally, emitting
 play events keyed by a client UUID that `/logs` dedups on reconcile. Serving it
 from Laravel changes where the bundle comes from, not how it runs.
@@ -216,7 +216,7 @@ php artisan test --testsuite=Feature
 |---------------------------------|--------------------------------------------------------|
 | `TokenManagerServiceTest.php`   | Token deduction, constraint validation, concurrency    |
 | `SecureShareLinkTest.php`       | PIN verification, OTP expiry, revocation, rate-limiting|
-| `DeviceSyncTest.php`            | Sync payload, override delivery, heartbeat             |
+| `BillboardSyncTest.php`         | Sync payload, override delivery, heartbeat             |
 | `AssetControllerTest.php`       | Presigned URL, confirm flow, duration validation       |
 
 JS scheduler tests live in `tests/js` and run with `npm test`; `LoopParityTest.php`
@@ -227,15 +227,16 @@ and `tests/js/loop-parity.test.mjs` assert against the same
 
 ## Answering the Open Questions (Implementation Plan)
 
-**1. Device Authentication:** Long-lived Sanctum tokens provisioned per device via
-`POST /api/v1/admin/devices`. The token is shown once at provision time and stored
-on the physical board. Tokens carry `device:sync` and `device:log` abilities.
+**1. Billboard Authentication:** Long-lived Sanctum tokens provisioned per billboard
+via `POST /api/v1/admin/billboards`. The token is shown once at provision time and
+stored on the physical board. Tokens carry `billboard:sync` and `billboard:log`
+abilities.
 
 **2. S3 File Uploads:** Direct-to-S3 via presigned PUT URLs. Laravel never touches
 the binary payload — it only generates the URL and, after the client confirms,
 dispatches `AssetProcessingJob` to run FFprobe and mark the asset as `is_synced`.
 
 **3. Real-time vs polling:** Both supported. `OverrideDispatched` broadcasts via
-Laravel Reverb on `private-device.{device_id}`. If Reverb is not configured,
+Laravel Reverb on `private-billboard.{billboard_id}`. If Reverb is not configured,
 overrides are queued in `timeline_overrides` and delivered on the next
 `GET /api/v1/sync` poll (60-second polling is safe).

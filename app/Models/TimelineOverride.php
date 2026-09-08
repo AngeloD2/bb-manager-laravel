@@ -14,7 +14,7 @@ class TimelineOverride extends Model
 
     protected $fillable = [
         'asset_id',
-        'device_id',
+        'billboard_id',
         'consumed',
         'consumed_at',
     ];
@@ -31,9 +31,9 @@ class TimelineOverride extends Model
         return $this->belongsTo(MediaAsset::class, 'asset_id');
     }
 
-    public function device(): BelongsTo
+    public function billboard(): BelongsTo
     {
-        return $this->belongsTo(Device::class);
+        return $this->belongsTo(Billboard::class);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

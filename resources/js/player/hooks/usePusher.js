@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import Pusher from 'pusher-js';
 
-export function usePusher({ deviceId, onCommand }) {
+export function usePusher({ billboardId, onCommand }) {
     const onCommandRef = useRef(onCommand);
     useEffect(() => {
       onCommandRef.current = onCommand;
@@ -17,7 +17,7 @@ export function usePusher({ deviceId, onCommand }) {
         console.warn('[usePusher] VITE_REVERB_APP_KEY is not set — WebSocket disabled.');
         return;
       }
-      if (!deviceId) return;
+      if (!billboardId) return;
 
       const pusher = new Pusher(key, {
         cluster: 'mt1',          // required by pusher-js; overridden by wsHost below
@@ -29,15 +29,15 @@ export function usePusher({ deviceId, onCommand }) {
         enabledTransports: ['ws', 'wss'],
       });
 
-      const channel = pusher.subscribe(`device.${deviceId}`);
-      channel.bind('device.command', (data) => {
-        // Reverb delivers the DeviceCommand payload: { command, payload }
+      const channel = pusher.subscribe(`billboard.${billboardId}`);
+      channel.bind('billboard.command', (data) => {
+        // Reverb delivers the BillboardCommand payload: { command, payload }
         onCommandRef.current(data?.command ?? null, data?.payload ?? null);
       });
 
     return () => {
-      pusher.unsubscribe(`device.${deviceId}`);
+      pusher.unsubscribe(`billboard.${billboardId}`);
       pusher.disconnect();
     };
-  }, [deviceId]);
+  }, [billboardId]);
 }

@@ -20,7 +20,7 @@ class MediaLoop extends Model
         'is_fallback',
         'is_global',
         'max_daily_spots',
-        'assigned_devices',
+        'assigned_billboards',
         'order_index',
     ];
 
@@ -28,7 +28,7 @@ class MediaLoop extends Model
         'is_fallback'      => 'boolean',
         'is_global'        => 'boolean',
         'max_daily_spots' => 'integer',
-        'assigned_devices' => 'array',
+        'assigned_billboards' => 'array',
     ];
 
     // ── Relationships ────────────────────────────────────────────────────────

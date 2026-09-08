@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Api\V1\MediaAssetResource;
 use App\Jobs\AssetProcessingJob;
 use App\Models\MediaAsset;
-use App\Services\DeviceNotifier;
+use App\Services\BillboardNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -27,7 +27,7 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 class AssetController extends Controller
 {
     public function __construct(
-        private readonly DeviceNotifier $notifier
+        private readonly BillboardNotifier $notifier
     ) {}
 
     // ── Listing ───────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ class AssetController extends Controller
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['nullable', 'integer', 'min:0'],
-            'assigned_devices'      => ['nullable', 'array'],
+            'assigned_billboards'      => ['nullable', 'array'],
             'is_global'             => ['boolean'],
             'campaign_start_date'   => ['nullable', 'date_format:Y-m-d'],
             'campaign_end_date'     => ['nullable', 'date_format:Y-m-d', 'after_or_equal:campaign_start_date'],
@@ -110,7 +110,7 @@ class AssetController extends Controller
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['sometimes', 'integer', 'min:0'],
-            'assigned_devices'      => ['nullable', 'array'],
+            'assigned_billboards'      => ['nullable', 'array'],
             'is_global'             => ['sometimes', 'boolean'],
             'campaign_start_date'   => ['nullable', 'date_format:Y-m-d'],
             'campaign_end_date'     => ['nullable', 'date_format:Y-m-d', 'after_or_equal:campaign_start_date'],
@@ -213,7 +213,7 @@ class AssetController extends Controller
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['nullable', 'integer', 'min:0'],
-            'assigned_devices'      => ['nullable'],
+            'assigned_billboards'      => ['nullable'],
             'is_global'             => ['nullable'],
             'conflict_asset_ids'    => ['nullable'],
             'stretch_to_fit'        => ['nullable'],
@@ -234,9 +234,9 @@ class AssetController extends Controller
             return response()->json(['message' => 'File exceeds 5GB limit.'], 400);
         }
 
-        $assignedDevices = $request->assigned_devices;
-        if (is_string($assignedDevices)) {
-            $assignedDevices = json_decode($assignedDevices, true);
+        $assignedBillboards = $request->assigned_billboards;
+        if (is_string($assignedBillboards)) {
+            $assignedBillboards = json_decode($assignedBillboards, true);
         }
 
         $conflictIds = $request->conflict_asset_ids;
@@ -256,7 +256,7 @@ class AssetController extends Controller
             'max_plays_per_hour'    => $request->max_plays_per_hour,
             'max_daily_plays'       => $request->max_daily_plays,
             'play_spots_remaining'  => $request->play_spots_remaining ?? 0,
-            'assigned_devices'      => $assignedDevices,
+            'assigned_billboards'      => $assignedBillboards,
             'is_global'             => filter_var($request->is_global, FILTER_VALIDATE_BOOLEAN),
             'campaign_start_date'   => $request->campaign_start_date,
             'campaign_end_date'     => $request->campaign_end_date,

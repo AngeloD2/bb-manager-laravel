@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Services\QueueGenerationService;
@@ -30,9 +30,9 @@ class QueueGenerationServiceTest extends TestCase
     }
 
     /** @test */
-    public function it_plays_loops_in_device_defined_order_and_finishes_a_loop_before_the_next(): void
+    public function it_plays_loops_in_billboard_defined_order_and_finishes_a_loop_before_the_next(): void
     {
-        // Loop A created first, but the device orders B before A.
+        // Loop A created first, but the billboard orders B before A.
         $loopA = MediaLoop::create(['name' => 'A', 'is_fallback' => false, 'is_global' => true]);
         $loopB = MediaLoop::create(['name' => 'B', 'is_fallback' => false, 'is_global' => true]);
 
@@ -40,11 +40,11 @@ class QueueGenerationServiceTest extends TestCase
         $this->asset('a2', $loopA, 1);
         $this->asset('b1', $loopB, 0);
 
-        $device = Device::create([
+        $billboard = Billboard::create([
             'name' => 'Board', 'loop_orders' => [$loopB->id, $loopA->id],
         ]);
 
-        $queue = app(QueueGenerationService::class)->getUpcomingQueue($device, 6);
+        $queue = app(QueueGenerationService::class)->getUpcomingQueue($billboard, 6);
         $names = array_map(fn ($i) => $i['asset_name'], $queue);
 
         // B's pass first (b1), then A's pass (a1, a2), then it wraps — loop-complete + ordered.
@@ -62,11 +62,11 @@ class QueueGenerationServiceTest extends TestCase
         $this->asset('p1', $loop, 0, ['max_plays_per_hour' => 2]);
         $this->asset('f1', $fallback, 0);
 
-        $device = Device::create([
+        $billboard = Billboard::create([
             'name' => 'Board', 'loop_orders' => [$loop->id, $fallback->id],
         ]);
 
-        $queue = app(QueueGenerationService::class)->getUpcomingQueue($device, 4);
+        $queue = app(QueueGenerationService::class)->getUpcomingQueue($billboard, 4);
         $names = array_map(fn ($i) => $i['asset_name'], $queue);
 
         $this->assertSame('p1', $names[0], 'first slot is the primary');
@@ -81,28 +81,28 @@ class QueueGenerationServiceTest extends TestCase
         $asset = $this->asset('p1', $loop, 0);
         $overrideAsset = $this->asset('o1', $loop, 1);
 
-        $device = Device::create([
+        $billboard = Billboard::create([
             'name' => 'Board', 'loop_orders' => [$loop->id],
         ]);
 
         $service = app(QueueGenerationService::class);
 
         // Get initial queue
-        $service->getUpcomingQueue($device, 4);
+        $service->getUpcomingQueue($billboard, 4);
         
         // Inject override
-        $service->injectOverride($device, $overrideAsset);
+        $service->injectOverride($billboard, $overrideAsset);
 
         // Retrieve queue and assert override is present
-        $queueAfterInject = $service->getUpcomingQueue($device, 4);
+        $queueAfterInject = $service->getUpcomingQueue($billboard, 4);
         $overrideCount = count(array_filter($queueAfterInject, fn ($i) => $i['is_override'] ?? false));
         $this->assertEquals(1, $overrideCount);
 
         // Cancel override
-        $service->cancelOverride($device);
+        $service->cancelOverride($billboard);
 
         // Retrieve queue and assert override is removed
-        $queueAfterCancel = $service->getUpcomingQueue($device, 4);
+        $queueAfterCancel = $service->getUpcomingQueue($billboard, 4);
         $overrideCountAfter = count(array_filter($queueAfterCancel, fn ($i) => $i['is_override'] ?? false));
         $this->assertEquals(0, $overrideCountAfter);
     }

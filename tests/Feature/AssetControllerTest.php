@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Models\Device;
+use App\Models\Billboard;
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
 use App\Jobs\AssetProcessingJob;
@@ -15,13 +15,13 @@ class AssetControllerTest extends TestCase
 {
     use RefreshDatabase;
 
-    private Device $adminDevice;
+    private Billboard $adminBillboard;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->adminDevice = Device::create(['name' => 'Admin App', 'location' => 'HQ']);
+        $this->adminBillboard = Billboard::create(['name' => 'Admin App', 'location' => 'HQ']);
 
     }
 
@@ -142,13 +142,13 @@ class AssetControllerTest extends TestCase
                 'file_type'          => 'VIDEO',
                 'duration_secs'      => 10,
                 'conflict_asset_ids' => json_encode([$conflict->id]),
-                'assigned_devices'   => json_encode([$this->adminDevice->id]),
+                'assigned_billboards'   => json_encode([$this->adminBillboard->id]),
             ])
             ->assertCreated();
 
         $asset = MediaAsset::where('name', 'New Ad')->first();
         $this->assertContains($conflict->id, $asset->conflicts->pluck('id')->toArray());
-        $this->assertSame([$this->adminDevice->id], $asset->assigned_devices);
+        $this->assertSame([$this->adminBillboard->id], $asset->assigned_billboards);
     }
 
     // ── Delete cleans up S3 ───────────────────────────────────────────────────
@@ -177,7 +177,7 @@ class AssetControllerTest extends TestCase
             'username' => 'admin-test-' . uniqid(),
             'password' => \Illuminate\Support\Facades\Hash::make('password'),
         ]);
-        $spot = $adminUser->createToken('admin-spot', ['admin'])->plainTextToken;
-        return $this->withToken($spot);
+        $token = $adminUser->createToken('admin-token', ['admin'])->plainTextToken;
+        return $this->withToken($token);
     }
 }

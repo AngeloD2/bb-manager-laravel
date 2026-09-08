@@ -1,5 +1,5 @@
-export async function deviceLogin(apiUrl, password) {
-  const res = await fetch(`${apiUrl}/device/login`, {
+export async function billboardLogin(apiUrl, password) {
+  const res = await fetch(`${apiUrl}/billboard/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ password }),
@@ -50,7 +50,7 @@ export async function reportStart(apiUrl, token, assetId) {
 
 // Flush a batch of locally-recorded play events. Each carries a client_event_id
 // so the server can dedup and charge each spot exactly once, even on retry.
-// Returns the parsed response: { data: { results, device_state, ... } }.
+// Returns the parsed response: { data: { results, billboard_state, ... } }.
 export async function flushLogs(apiUrl, token, events) {
   const res = await fetch(`${apiUrl}/logs`, {
     method: 'POST',

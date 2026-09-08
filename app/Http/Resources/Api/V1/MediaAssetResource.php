@@ -30,7 +30,7 @@ class MediaAssetResource extends JsonResource
             'campaign_start_date'   => $this->campaign_start_date?->format('Y-m-d'),
             'campaign_end_date'     => $this->campaign_end_date?->format('Y-m-d'),
             'playback_times'        => $this->playback_times ?? [],
-            'assigned_devices'      => $this->assigned_devices,
+            'assigned_billboards'      => $this->assigned_billboards,
             'loop'                => new MediaLoopResource($this->whenLoaded('loop')),
             'conflict_asset_ids'    => $this->whenLoaded('conflicts', fn () => $this->conflicts->pluck('id')->toArray()),
             'created_at'            => $this->created_at?->toIso8601String(),

@@ -3,27 +3,27 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
-use App\Models\Device;
+use App\Models\Billboard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 /**
- * DeviceController
+ * BillboardController
  *
- * Provisions and manages billboard device credentials.
+ * Provisions and manages billboard credentials.
  *
- *  GET    /api/v1/admin/devices           - list all devices
- *  POST   /api/v1/admin/devices           - provision a new device + return Sanctum token
- *  DELETE /api/v1/admin/devices/{device}  - decommission a device (revoke tokens)
+ *  GET    /api/v1/admin/billboards           - list all billboards
+ *  POST   /api/v1/admin/billboards           - provision a new billboard + return Sanctum token
+ *  DELETE /api/v1/admin/billboards/{billboard}  - decommission a billboard (revoke tokens)
  */
-class DeviceController extends Controller
+class BillboardController extends Controller
 {
     public function index(): JsonResponse
     {
         $secondsPerSpot = (int) (\App\Models\Setting::where('key', 'seconds_per_spot')->value('value') ?? 15);
 
-        $devices = Device::latest('last_seen_at')->get()->map(function (Device $d) use ($secondsPerSpot) {
+        $billboards = Billboard::latest('last_seen_at')->get()->map(function (Billboard $d) use ($secondsPerSpot) {
             $totalSpots = 0;
             $playedSpots = 0;
             $openSpots = 0;
@@ -68,7 +68,7 @@ class DeviceController extends Controller
             ];
         });
 
-        return response()->json(['data' => $devices]);
+        return response()->json(['data' => $billboards]);
     }
 
     public function store(Request $request): JsonResponse
@@ -90,19 +90,19 @@ class DeviceController extends Controller
             'password' => ['nullable', 'string', 'min:4', 'max:120'],
         ]);
 
-        $device = Device::create(\Illuminate\Support\Arr::except($data, 'password'));
-        $password = $this->assignPassword($device, $data['password'] ?? null);
+        $billboard = Billboard::create(\Illuminate\Support\Arr::except($data, 'password'));
+        $password = $this->assignPassword($billboard, $data['password'] ?? null);
 
         return response()->json([
             'data' => [
-                'device' => [
-                    'id'       => $device->id,
-                    'name'     => $device->name,
-                    'location' => $device->location,
-                    'geo_zone' => $device->geo_zone,
-                    'timezone' => $device->timezone,
-                    'active_hours_start' => $device->active_hours_start,
-                    'active_hours_end' => $device->active_hours_end,
+                'billboard' => [
+                    'id'       => $billboard->id,
+                    'name'     => $billboard->name,
+                    'location' => $billboard->location,
+                    'geo_zone' => $billboard->geo_zone,
+                    'timezone' => $billboard->timezone,
+                    'active_hours_start' => $billboard->active_hours_start,
+                    'active_hours_end' => $billboard->active_hours_end,
                 ],
                 'password' => $password,
             ],
@@ -114,15 +114,15 @@ class DeviceController extends Controller
      * Set a billboard's player password. Generates a unique one when $plain is
      * empty; otherwise verifies it isn't already used by another billboard.
      */
-    private function assignPassword(Device $device, ?string $plain): string
+    private function assignPassword(Billboard $billboard, ?string $plain): string
     {
         if ($plain === null || $plain === '') {
             do {
-                $plain = Device::generatePassword();
-            } while (Device::where('password_fingerprint', Device::fingerprint($plain))->exists());
+                $plain = Billboard::generatePassword();
+            } while (Billboard::where('password_fingerprint', Billboard::fingerprint($plain))->exists());
         } elseif (
-            Device::where('password_fingerprint', Device::fingerprint($plain))
-                ->where('id', '!=', $device->id)
+            Billboard::where('password_fingerprint', Billboard::fingerprint($plain))
+                ->where('id', '!=', $billboard->id)
                 ->exists()
         ) {
             throw ValidationException::withMessages([
@@ -130,43 +130,43 @@ class DeviceController extends Controller
             ]);
         }
 
-        $device->setPassword($plain);
-        $device->save();
+        $billboard->setPassword($plain);
+        $billboard->save();
 
         return $plain;
     }
 
     /**
-     * Exchange a billboard password for a Sanctum device token.
+     * Exchange a billboard password for a Sanctum billboard token.
      * Public + rate-limited; the password is the board's sole identity.
      */
     public function login(Request $request): JsonResponse
     {
         $data = $request->validate(['password' => ['required', 'string']]);
 
-        $device = Device::where('password_fingerprint', Device::fingerprint($data['password']))->first();
+        $billboard = Billboard::where('password_fingerprint', Billboard::fingerprint($data['password']))->first();
 
-        if (! $device) {
+        if (! $billboard) {
             throw ValidationException::withMessages([
                 'password' => ['No billboard matches that password.'],
             ]);
         }
 
         // One active session per board: drop prior tokens before minting a fresh one.
-        $device->tokens()->delete();
-        $token = $device->createToken("device-{$device->id}", ['device:sync', 'device:log'])->plainTextToken;
-        $device->heartbeat();
+        $billboard->tokens()->delete();
+        $token = $billboard->createToken("billboard-{$billboard->id}", ['billboard:sync', 'billboard:log'])->plainTextToken;
+        $billboard->heartbeat();
 
         return response()->json([
             'data' => [
-                'device'    => ['id' => $device->id, 'name' => $device->name],
+                'billboard'    => ['id' => $billboard->id, 'name' => $billboard->name],
                 'api_token' => $token,
             ],
             'message' => 'Billboard authenticated.',
         ]);
     }
 
-    public function update(Request $request, Device $device): JsonResponse
+    public function update(Request $request, Billboard $billboard): JsonResponse
     {
         if ($request->has('active_hours_start') && $request->input('active_hours_start')) {
             $request->merge(['active_hours_start' => substr($request->input('active_hours_start'), 0, 5)]);
@@ -187,65 +187,65 @@ class DeviceController extends Controller
         ]);
 
         if (array_key_exists('password', $data)) {
-            $this->assignPassword($device, $data['password']);
+            $this->assignPassword($billboard, $data['password']);
             unset($data['password']);
         }
 
-        $device->update($data);
+        $billboard->update($data);
 
         if (isset($data['is_frozen'])) {
             $commandStr = $data['is_frozen'] ? 'freeze' : 'unfreeze';
             if (config('broadcasting.default') === 'reverb') {
                 try {
-                    broadcast(new \App\Events\DeviceCommand($device, $commandStr));
+                    broadcast(new \App\Events\BillboardCommand($billboard, $commandStr));
                 } catch (\Throwable) {}
             }
         }
 
         return response()->json([
             'data' => [
-                'id'        => $device->id,
-                'name'      => $device->name,
-                'is_frozen' => $device->is_frozen,
+                'id'        => $billboard->id,
+                'name'      => $billboard->name,
+                'is_frozen' => $billboard->is_frozen,
             ],
-            'message' => 'Device updated.',
+            'message' => 'Billboard updated.',
         ]);
     }
 
-    public function destroy(Device $device): JsonResponse
+    public function destroy(Billboard $billboard): JsonResponse
     {
-        $deviceId = $device->id;
+        $billboardId = $billboard->id;
 
-        $device->tokens()->delete();
-        $device->delete();
+        $billboard->tokens()->delete();
+        $billboard->delete();
 
-        // Remove this device from assigned_devices on all assets and loops.
-        foreach (\App\Models\MediaAsset::whereJsonContains('assigned_devices', $deviceId)->get() as $asset) {
-            $asset->assigned_devices = array_values(array_filter($asset->assigned_devices, fn($id) => $id !== $deviceId));
+        // Remove this billboard from assigned_billboards on all assets and loops.
+        foreach (\App\Models\MediaAsset::whereJsonContains('assigned_billboards', $billboardId)->get() as $asset) {
+            $asset->assigned_billboards = array_values(array_filter($asset->assigned_billboards, fn($id) => $id !== $billboardId));
             $asset->save();
         }
 
-        foreach (\App\Models\MediaLoop::whereJsonContains('assigned_devices', $deviceId)->get() as $loop) {
-            $loop->assigned_devices = array_values(array_filter($loop->assigned_devices, fn($id) => $id !== $deviceId));
+        foreach (\App\Models\MediaLoop::whereJsonContains('assigned_billboards', $billboardId)->get() as $loop) {
+            $loop->assigned_billboards = array_values(array_filter($loop->assigned_billboards, fn($id) => $id !== $billboardId));
             $loop->save();
         }
 
-        return response()->json(['message' => 'Device decommissioned and tokens revoked.']);
+        return response()->json(['message' => 'Billboard decommissioned and tokens revoked.']);
     }
 
-    public function schedule(Device $device): JsonResponse
+    public function schedule(Billboard $billboard): JsonResponse
     {
-        if (!$device->active_hours_start || !$device->active_hours_end) {
+        if (!$billboard->active_hours_start || !$billboard->active_hours_end) {
             return response()->json([
                 'active_window' => null,
                 'schedules' => []
             ]);
         }
 
-        $tz = $device->timezone ?? 'UTC';
+        $tz = $billboard->timezone ?? 'UTC';
         $now = now($tz);
-        $startStr = $now->format('Y-m-d') . ' ' . \Carbon\Carbon::parse($device->active_hours_start)->format('H:i:s');
-        $endStr = $now->format('Y-m-d') . ' ' . \Carbon\Carbon::parse($device->active_hours_end)->format('H:i:s');
+        $startStr = $now->format('Y-m-d') . ' ' . \Carbon\Carbon::parse($billboard->active_hours_start)->format('H:i:s');
+        $endStr = $now->format('Y-m-d') . ' ' . \Carbon\Carbon::parse($billboard->active_hours_end)->format('H:i:s');
         
         $start = \Carbon\Carbon::parse($startStr, $tz);
         $end = \Carbon\Carbon::parse($endStr, $tz);
@@ -256,10 +256,10 @@ class DeviceController extends Controller
         $availableSeconds = $start->diffInSeconds($end);
         $startSecs = $start->timestamp;
 
-        $loops = \App\Models\MediaLoop::with('assets')->get()->filter(function ($loop) use ($device) {
+        $loops = \App\Models\MediaLoop::with('assets')->get()->filter(function ($loop) use ($billboard) {
             if ($loop->is_global) return true;
-            if (empty($loop->assigned_devices)) return false;
-            return in_array($device->id, $loop->assigned_devices);
+            if (empty($loop->assigned_billboards)) return false;
+            return in_array($billboard->id, $loop->assigned_billboards);
         });
 
         $constrainedLoops = [];
@@ -333,24 +333,24 @@ class DeviceController extends Controller
 
         return response()->json([
             'active_window' => [
-                'start' => \Carbon\Carbon::parse($device->active_hours_start)->format('H:i:s'),
-                'end' => \Carbon\Carbon::parse($device->active_hours_end)->format('H:i:s')
+                'start' => \Carbon\Carbon::parse($billboard->active_hours_start)->format('H:i:s'),
+                'end' => \Carbon\Carbon::parse($billboard->active_hours_end)->format('H:i:s')
             ],
             'schedules' => $schedules
         ]);
     }
 
-    public function updateLoopOrder(Request $request, Device $device): JsonResponse
+    public function updateLoopOrder(Request $request, Billboard $billboard): JsonResponse
     {
         $data = $request->validate([
             'loop_ids'   => ['required', 'array'],
             'loop_ids.*' => ['required', 'uuid', \Illuminate\Validation\Rule::exists('media_loops', 'id')],
         ]);
 
-        $device->update(['loop_orders' => $data['loop_ids']]);
+        $billboard->update(['loop_orders' => $data['loop_ids']]);
 
-        app(\App\Services\DeviceNotifier::class)->notifyDevice($device);
+        app(\App\Services\BillboardNotifier::class)->notifyBillboard($billboard);
 
-        return response()->json(['message' => 'Device loops reordered.']);
+        return response()->json(['message' => 'Billboard loops reordered.']);
     }
 }
