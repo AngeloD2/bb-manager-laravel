@@ -41,8 +41,8 @@ class ConstraintValidationService
         $tz = $timezone ?? config('app.timezone', 'UTC');
         $now ??= now($tz);
 
-        // 0. Campaign flight period gate (skip before start or after end date)
-        if (!$asset->isWithinCampaignPeriod($now)) {
+        // 0. Flight window gate: the campaign's window narrowed by the asset's own
+        if (!$asset->isWithinFlightWindow($now)) {
             return self::OUTSIDE_FLIGHT_DATES;
         }
 

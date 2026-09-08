@@ -38,7 +38,7 @@ class LoopController extends Controller
     {
         $data = $request->validate([
             'name'             => ['required', 'string', 'max:120'],
-            'parent_loop_id' => ['nullable', 'uuid', 'exists:media_loops,id'],
+            'campaign_id'      => ['nullable', 'uuid', 'exists:campaigns,id'],
             'is_fallback'      => ['boolean'],
             'is_global'        => ['boolean'],
             'max_daily_spots' => ['nullable', 'integer', 'min:1', 'max:99999'],
@@ -56,7 +56,7 @@ class LoopController extends Controller
     {
         $data = $request->validate([
             'name'             => ['sometimes', 'string', 'max:120'],
-            'parent_loop_id' => ['nullable', 'uuid', Rule::exists('media_loops', 'id')->whereNot('id', $loop->id)],
+            'campaign_id'    => ['nullable', 'uuid', Rule::exists('campaigns', 'id')],
             'is_fallback'      => ['sometimes', 'boolean'],
             'is_global'        => ['sometimes', 'boolean'],
             'max_daily_spots' => ['nullable', 'integer', 'min:1', 'max:99999'],

@@ -24,15 +24,14 @@ class MediaAsset extends Model
         'size_bytes',
         'duration_secs',
         'geo_campaign',
-        'campaign_name',
         'is_synced',
         'is_global',
         'max_plays_per_hour',
         'max_daily_plays',
         'play_spots_remaining',
         'assigned_billboards',
-        'campaign_start_date',
-        'campaign_end_date',
+        'runs_from',
+        'runs_until',
         'playback_times',
         'sync_error',
     ];
@@ -46,8 +45,8 @@ class MediaAsset extends Model
         'max_daily_plays'       => 'integer',
         'play_spots_remaining'  => 'integer',
         'assigned_billboards'      => 'array',
-        'campaign_start_date'   => 'date:Y-m-d',
-        'campaign_end_date'     => 'date:Y-m-d',
+        'runs_from'             => 'date:Y-m-d',
+        'runs_until'            => 'date:Y-m-d',
         'playback_times'        => 'array',
     ];
 
@@ -125,19 +124,54 @@ class MediaAsset extends Model
         return $playedAt ? \Carbon\Carbon::parse($playedAt)->toIso8601String() : null;
     }
 
-    /** True when today falls within the optional campaign flight window. */
-    public function isWithinCampaignPeriod(\Carbon\Carbon $date): bool
+    /**
+     * The dates this asset may actually air between: its campaign's window
+     * (reached through its loop) narrowed by the asset's own optional override.
+     * Either bound may be null, meaning unbounded on that side.
+     *
+     * @return array{0: ?\Carbon\Carbon, 1: ?\Carbon\Carbon}
+     */
+    public function effectiveFlightWindow(): array
     {
-        if ($this->campaign_start_date === null && $this->campaign_end_date === null) {
-            return true;
-        }
-        if ($this->campaign_start_date !== null && $date->lt($this->campaign_start_date->copy()->startOfDay())) {
+        $campaign = $this->loop?->campaign;
+
+        $from = $this->latest($campaign?->starts_on, $this->runs_from);
+        $until = $this->earliest($campaign?->ends_on, $this->runs_until);
+
+        return [$from, $until];
+    }
+
+    /** True when the given date falls within the effective flight window. */
+    public function isWithinFlightWindow(\Carbon\Carbon $date): bool
+    {
+        [$from, $until] = $this->effectiveFlightWindow();
+
+        if ($from !== null && $date->lt($from->copy()->startOfDay())) {
             return false;
         }
-        if ($this->campaign_end_date !== null && $date->gt($this->campaign_end_date->copy()->endOfDay())) {
+        if ($until !== null && $date->gt($until->copy()->endOfDay())) {
             return false;
         }
+
         return true;
+    }
+
+    /** The later of two optional dates; null only when both are null. */
+    private function latest(?\Carbon\Carbon $a, ?\Carbon\Carbon $b): ?\Carbon\Carbon
+    {
+        if ($a === null) return $b;
+        if ($b === null) return $a;
+
+        return $a->gt($b) ? $a : $b;
+    }
+
+    /** The earlier of two optional dates; null only when both are null. */
+    private function earliest(?\Carbon\Carbon $a, ?\Carbon\Carbon $b): ?\Carbon\Carbon
+    {
+        if ($a === null) return $b;
+        if ($b === null) return $a;
+
+        return $a->lt($b) ? $a : $b;
     }
 
     /**

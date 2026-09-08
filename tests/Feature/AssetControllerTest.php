@@ -73,7 +73,6 @@ class AssetControllerTest extends TestCase
                 'file_type'            => 'VIDEO',
                 'loop_id'              => $loop->id,
                 'duration_secs'        => 10,
-                'campaign_name'        => 'Summer Campaign',
                 'play_spots_remaining' => 100,
             ])
             ->assertCreated()

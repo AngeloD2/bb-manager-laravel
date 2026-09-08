@@ -171,7 +171,7 @@ class SyncController extends Controller
         /** @var \App\Models\Billboard $billboard */
         $billboard = $request->user();
 
-        $asset = \App\Models\MediaAsset::with('loop')->find($assetId);
+        $asset = \App\Models\MediaAsset::with('loop.campaign')->find($assetId);
 
         if (!$asset) {
             return response()->json(['message' => 'Asset not found.'], 404);
