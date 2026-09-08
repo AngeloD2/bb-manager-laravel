@@ -42,10 +42,11 @@ class SyncController extends Controller
 
         return response()->json([
             'data' => [
+                // No zone is sent: zone targeting is enforced server-side at
+                // sync and the player is deliberately zone-unaware.
                 'billboard'    => [
                     'id'        => $billboard->id,
                     'name'      => $billboard->name,
-                    'geo_zone'  => $billboard->geo_zone,
                     'is_frozen' => (bool) $billboard->is_frozen,
                 ],
                 'loops'           => MediaLoopResource::collection($payload['loops']),
