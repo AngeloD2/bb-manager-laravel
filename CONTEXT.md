@@ -36,14 +36,9 @@ _Avoid_: Creative, file, media, ad
 
 **Loop**:
 An ordered rotation of Assets that a Billboard plays through repeatedly. Carries
-the playback rules: its own daily Spot cap, and whether it is a Fallback.
+the playback rules: its own daily Spot cap, and whether it is a Fallback. It belongs
+to a Campaign (or to none, when it's Fallback or perpetual).
 _Avoid_: Playlist, rotation, schedule
-
-**Folder**:
-A container that groups Loops and Assets for the operator's own organisation.
-Nests inside other Folders. Purely organisational — it holds no playback
-meaning.
-_Avoid_: Directory, category
 
 **Fallback**:
 A Loop reserved for unsold airtime, played to fill Spots that no booked Asset is
@@ -51,7 +46,7 @@ eligible for. Its Assets are Fallback Assets.
 _Avoid_: Filler, default, house ad, PSA
 
 **Campaign**:
-An advertiser's booking of an Asset across a date range.
+A named booking period that owns Loops and carries the date window.
 
 **Flight window**:
 The date range a Campaign is bookable between. Outside it the Asset is
@@ -67,12 +62,14 @@ _Avoid_: Daypart, time slot
 A pair of Assets that must never air back-to-back — competing advertisers who
 have each paid not to be adjacent to the other.
 
-**Geo zone**:
-A geographic label on a Billboard describing where it physically stands.
+**Zone**:
+A geographic label on a Billboard describing where it physically stands. Used for
+zone targeting.
 
-**Geo campaign**:
-The geographic targeting label on an Asset, matched against a Billboard's Geo
-zone.
+**Zone targeting**:
+The geographic targeting configured on an Asset, matched against a Billboard's Zone.
+Explicit Assignment overrides zone targeting: if an Asset has explicitly assigned Billboards,
+its Zone targeting is ignored.
 
 ### Hardware
 
