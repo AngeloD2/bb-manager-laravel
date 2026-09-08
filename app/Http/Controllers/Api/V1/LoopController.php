@@ -49,7 +49,7 @@ class LoopController extends Controller
 
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new MediaLoopResource($loop), 201);
+        return (new MediaLoopResource($loop))->response()->setStatusCode(201);
     }
 
     public function update(Request $request, MediaLoop $loop): JsonResponse
@@ -67,7 +67,7 @@ class LoopController extends Controller
 
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new MediaLoopResource($loop));
+        return (new MediaLoopResource($loop))->response();
     }
 
     public function destroy(MediaLoop $loop): JsonResponse

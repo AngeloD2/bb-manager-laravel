@@ -76,9 +76,9 @@ class AssetControllerTest extends TestCase
                 'play_spots_remaining' => 100,
             ])
             ->assertCreated()
-            ->assertJsonPath('name', 'Summer Ad')
-            ->assertJsonPath('file_path', 'media/2026/01/summer_ad.mp4')
-            ->assertJsonPath('is_synced', false);
+            ->assertJsonPath('data.name', 'Summer Ad')
+            ->assertJsonPath('data.file_path', 'media/2026/01/summer_ad.mp4')
+            ->assertJsonPath('data.is_synced', false);
 
         $this->assertDatabaseHas('media_assets', [
             'name'      => 'Summer Ad',

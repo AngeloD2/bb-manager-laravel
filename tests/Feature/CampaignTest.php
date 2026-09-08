@@ -150,7 +150,7 @@ class CampaignTest extends TestCase
                 'ends_on'   => '2026-10-31',
             ])
             ->assertCreated()
-            ->assertJsonPath('name', 'October 2026');
+            ->assertJsonPath('data.name', 'October 2026');
 
         $this->assertDatabaseHas('campaigns', ['name' => 'October 2026']);
     }

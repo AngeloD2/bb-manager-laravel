@@ -46,7 +46,7 @@ class CampaignController extends Controller
         // one can change eligibility immediately.
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new CampaignResource($campaign), 201);
+        return (new CampaignResource($campaign))->response()->setStatusCode(201);
     }
 
     public function update(Request $request, Campaign $campaign): JsonResponse
@@ -60,7 +60,7 @@ class CampaignController extends Controller
         $campaign->update($data);
         $this->notifier->notifyScheduleChanged();
 
-        return response()->json(new CampaignResource($campaign->fresh()));
+        return (new CampaignResource($campaign->fresh()))->response();
     }
 
     /**
