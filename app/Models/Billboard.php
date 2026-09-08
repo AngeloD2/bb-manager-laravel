@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Crypt;
 use Laravel\Sanctum\HasApiTokens;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 
 class Billboard extends Model
 {
@@ -15,7 +16,7 @@ class Billboard extends Model
     protected $fillable = [
         'name',
         'location',
-        'geo_zone',
+        'zone_id',
         'timezone',
         'is_online',
         'is_frozen',
@@ -43,6 +44,11 @@ class Billboard extends Model
     ];
 
     // ── Relationships ────────────────────────────────────────────────────────
+
+    public function zone()
+    {
+        return $this->belongsTo(Zone::class);
+    }
 
     public function playbackLogs(): HasMany
     {

@@ -44,8 +44,8 @@ class AssetController extends Controller
             $query->where('file_type', strtoupper($request->file_type));
         }
 
-        if ($request->filled('geo_campaign')) {
-            $query->where('geo_campaign', $request->geo_campaign);
+        if ($request->filled('targeted_zones')) {
+            $query->where('targeted_zones', $request->targeted_zones);
         }
 
         if ($request->filled('search')) {
@@ -69,7 +69,7 @@ class AssetController extends Controller
             'loop_id'             => ['nullable', 'uuid', 'exists:media_loops,id'],
             'size_bytes'            => ['required', 'integer', 'min:1'],
             'duration_secs'         => ['nullable', 'integer', 'min:1'],
-            'geo_campaign'          => ['nullable', 'string', 'max:120'],
+            'targeted_zones'          => ['nullable', 'array'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['nullable', 'integer', 'min:0'],
@@ -104,7 +104,7 @@ class AssetController extends Controller
             'name'                  => ['sometimes', 'string', 'max:200'],
             'duration_secs'         => ['sometimes', 'integer', 'min:1'],
             'loop_id'             => ['nullable', 'uuid', 'exists:media_loops,id'],
-            'geo_campaign'          => ['nullable', 'string', 'max:120'],
+            'targeted_zones'          => ['nullable', 'array'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['sometimes', 'integer', 'min:0'],
@@ -206,7 +206,7 @@ class AssetController extends Controller
             'file_type'             => ['required', 'in:VIDEO,GIF,PHOTO'],
             'loop_id'               => ['nullable', 'uuid', 'exists:media_loops,id'],
             'duration_secs'         => ['nullable', 'integer', 'min:1'],
-            'geo_campaign'          => ['nullable', 'string', 'max:120'],
+            'targeted_zones'          => ['nullable'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['nullable', 'integer', 'min:0'],
@@ -232,6 +232,10 @@ class AssetController extends Controller
         }
 
         $assignedBillboards = $request->assigned_billboards;
+        $targetedZones = $request->targeted_zones;
+        if (is_string($targetedZones)) {
+            $targetedZones = json_decode($targetedZones, true);
+        }
         if (is_string($assignedBillboards)) {
             $assignedBillboards = json_decode($assignedBillboards, true);
         }
@@ -248,7 +252,7 @@ class AssetController extends Controller
             'loop_id'               => $request->loop_id,
             'size_bytes'            => $size,
             'duration_secs'         => $request->duration_secs ?? 10,
-            'geo_campaign'          => $request->geo_campaign,
+            'targeted_zones'          => $targetedZones,
             'max_plays_per_hour'    => $request->max_plays_per_hour,
             'max_daily_plays'       => $request->max_daily_plays,
             'play_spots_remaining'  => $request->play_spots_remaining ?? 0,

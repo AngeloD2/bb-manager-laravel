@@ -397,21 +397,26 @@ class QueueGenerationService
         if ($asset->is_global) {
             return true;
         }
-        // Asset-level: per-billboard check
-        if (!empty($asset->assigned_billboards) && !in_array($billboard->id, $asset->assigned_billboards)) {
-            return false;
+        
+        // 1. Explicit assignment takes precedence
+        if (!empty($asset->assigned_billboards)) {
+            return in_array($billboard->id, $asset->assigned_billboards);
         }
-        if (empty($asset->assigned_billboards)) {
-            // Inherit from loop
-            if ($asset->loop && $asset->loop->is_global) {
-                return true;
-            }
-            if ($asset->loop && !empty($asset->loop->assigned_billboards)) {
-                return in_array($billboard->id, $asset->loop->assigned_billboards);
-            }
-            // No assignment at all — not visible
-            return false;
+
+        // 2. Zone targeting decides eligibility if set
+        if (!empty($asset->targeted_zones)) {
+            return $billboard->zone_id && in_array($billboard->zone_id, $asset->targeted_zones);
         }
-        return true;
+
+        // 3. Fall back to loop assignment logic
+        if ($asset->loop && $asset->loop->is_global) {
+            return true;
+        }
+        if ($asset->loop && !empty($asset->loop->assigned_billboards)) {
+            return in_array($billboard->id, $asset->loop->assigned_billboards);
+        }
+
+        // No assignment at all — not visible
+        return false;
     }
 }

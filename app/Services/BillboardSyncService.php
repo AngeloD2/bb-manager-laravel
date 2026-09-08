@@ -61,24 +61,26 @@ class BillboardSyncService
             if ($asset->is_global) {
                 return true;
             }
-            // Asset-level: per-billboard check
-            if (!empty($asset->assigned_billboards) && !in_array($billboard->id, $asset->assigned_billboards)) {
-                return false;
+            
+            // 1. Explicit assignment takes precedence
+            if (!empty($asset->assigned_billboards)) {
+                return in_array($billboard->id, $asset->assigned_billboards);
             }
-            if (empty($asset->assigned_billboards) && !($asset->loop && $asset->loop->is_global)) {
-                // Not explicitly assigned and loop is not global — check loop assignment
-                if ($asset->loop && !empty($asset->loop->assigned_billboards) && !in_array($billboard->id, $asset->loop->assigned_billboards)) {
-                    return false;
-                }
-                // Not assigned to any billboard and loop has no assignments — not visible
-                if ($asset->loop && empty($asset->loop->assigned_billboards) && !$asset->loop->is_global) {
-                    return false;
-                }
-                if (!$asset->loop) {
-                    return false;
-                }
+            
+            // 2. Zone targeting decides eligibility if set
+            if (!empty($asset->targeted_zones)) {
+                return $billboard->zone_id && in_array($billboard->zone_id, $asset->targeted_zones);
             }
-            return true;
+
+            // 3. Fall back to loop assignment logic
+            if ($asset->loop && $asset->loop->is_global) {
+                return true;
+            }
+            if ($asset->loop && !empty($asset->loop->assigned_billboards)) {
+                return in_array($billboard->id, $asset->loop->assigned_billboards);
+            }
+            
+            return false;
         };
 
         // ── Assets: primary (non-fallback) ───────────────────────────────────
