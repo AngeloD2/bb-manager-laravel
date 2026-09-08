@@ -51,7 +51,7 @@ class AssetController extends Controller
         if ($request->filled('search')) {
             $query->where(function ($q) use ($request) {
                 $q->where('name', 'ilike', "%{$request->search}%")
-                  ->orWhere('campaign_name', 'ilike', "%{$request->search}%");
+                  ->orWhereHas('loop.campaign', fn ($c) => $c->where('name', 'ilike', "%{$request->search}%"));
             });
         }
 
@@ -70,14 +70,13 @@ class AssetController extends Controller
             'size_bytes'            => ['required', 'integer', 'min:1'],
             'duration_secs'         => ['nullable', 'integer', 'min:1'],
             'geo_campaign'          => ['nullable', 'string', 'max:120'],
-            'campaign_name'         => ['nullable', 'string', 'max:200'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['nullable', 'integer', 'min:0'],
             'assigned_billboards'      => ['nullable', 'array'],
             'is_global'             => ['boolean'],
-            'campaign_start_date'   => ['nullable', 'date_format:Y-m-d'],
-            'campaign_end_date'     => ['nullable', 'date_format:Y-m-d', 'after_or_equal:campaign_start_date'],
+            'runs_from'             => ['nullable', 'date_format:Y-m-d'],
+            'runs_until'            => ['nullable', 'date_format:Y-m-d', 'after_or_equal:runs_from'],
             'playback_times'        => ['nullable', 'array'],
             'playback_times.*'      => ['string', 'regex:/^\d{2}:\d{2}$/'],
             'conflict_asset_ids'    => ['nullable', 'array'],
@@ -106,14 +105,13 @@ class AssetController extends Controller
             'duration_secs'         => ['sometimes', 'integer', 'min:1'],
             'loop_id'             => ['nullable', 'uuid', 'exists:media_loops,id'],
             'geo_campaign'          => ['nullable', 'string', 'max:120'],
-            'campaign_name'         => ['nullable', 'string', 'max:200'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['sometimes', 'integer', 'min:0'],
             'assigned_billboards'      => ['nullable', 'array'],
             'is_global'             => ['sometimes', 'boolean'],
-            'campaign_start_date'   => ['nullable', 'date_format:Y-m-d'],
-            'campaign_end_date'     => ['nullable', 'date_format:Y-m-d', 'after_or_equal:campaign_start_date'],
+            'runs_from'             => ['nullable', 'date_format:Y-m-d'],
+            'runs_until'            => ['nullable', 'date_format:Y-m-d', 'after_or_equal:runs_from'],
             'playback_times'        => ['nullable', 'array'],
             'playback_times.*'      => ['string', 'regex:/^\d{2}:\d{2}$/'],
             'conflict_asset_ids'    => ['nullable', 'array'],
@@ -209,7 +207,6 @@ class AssetController extends Controller
             'loop_id'               => ['nullable', 'uuid', 'exists:media_loops,id'],
             'duration_secs'         => ['nullable', 'integer', 'min:1'],
             'geo_campaign'          => ['nullable', 'string', 'max:120'],
-            'campaign_name'         => ['nullable', 'string', 'max:200'],
             'max_plays_per_hour'    => ['nullable', 'integer', 'min:1'],
             'max_daily_plays'       => ['nullable', 'integer', 'min:1'],
             'play_spots_remaining'  => ['nullable', 'integer', 'min:0'],
@@ -252,14 +249,13 @@ class AssetController extends Controller
             'size_bytes'            => $size,
             'duration_secs'         => $request->duration_secs ?? 10,
             'geo_campaign'          => $request->geo_campaign,
-            'campaign_name'         => $request->campaign_name,
             'max_plays_per_hour'    => $request->max_plays_per_hour,
             'max_daily_plays'       => $request->max_daily_plays,
             'play_spots_remaining'  => $request->play_spots_remaining ?? 0,
             'assigned_billboards'      => $assignedBillboards,
             'is_global'             => filter_var($request->is_global, FILTER_VALIDATE_BOOLEAN),
-            'campaign_start_date'   => $request->campaign_start_date,
-            'campaign_end_date'     => $request->campaign_end_date,
+            'runs_from'             => $request->runs_from,
+            'runs_until'            => $request->runs_until,
             'playback_times'        => is_string($request->playback_times)
                                            ? json_decode($request->playback_times, true)
                                            : $request->playback_times,

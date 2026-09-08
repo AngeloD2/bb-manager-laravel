@@ -82,7 +82,7 @@ class BillboardSyncService
         };
 
         // ── Assets: primary (non-fallback) ───────────────────────────────────
-        $primaryAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+        $primaryAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop.campaign', 'conflicts')
             ->where('is_synced', true)
             ->whereHas('loop', fn ($q) => $q->where('is_fallback', false))
             ->get()
@@ -91,7 +91,7 @@ class BillboardSyncService
             ->values();
 
         // ── Assets: fallback ─────────────────────────────────────────────────
-        $fallbackAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+        $fallbackAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop.campaign', 'conflicts')
             ->where('is_synced', true)
             ->whereHas('loop', fn ($q) => $q->where('is_fallback', true))
             ->get()
@@ -99,7 +99,7 @@ class BillboardSyncService
             ->values();
 
         // ── Assets: standalone (no loop) ─────────────────────────────────────
-        $standaloneAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop', 'conflicts')
+        $standaloneAssets = $billboard->is_frozen ? collect() : MediaAsset::with('loop.campaign', 'conflicts')
             ->where('is_synced', true)
             ->whereNull('loop_id')
             ->get()
@@ -187,6 +187,10 @@ class BillboardSyncService
         $assets = [];
         foreach ($primaryAssets->merge($fallbackAssets)->merge($standaloneAssets) as $asset) {
             /** @var MediaAsset $asset */
+            // Resolve the window once: it reaches through loop -> campaign, so
+            // calling it per-field would be a second lazy load per asset.
+            [$flightFrom, $flightUntil] = $asset->effectiveFlightWindow();
+
             $assets[$asset->id] = [
                 'play_spots_remaining' => (int) $asset->play_spots_remaining,
                 'footprint'            => $asset->spotFootprint($secondsPerSpot),
@@ -195,8 +199,12 @@ class BillboardSyncService
                 'last_played_at'       => $asset->lastPlayedAt(),
                 'max_daily_plays'      => $asset->max_daily_plays,
                 'plays_today'          => $asset->playsToday($billboard->timezone),
-                'campaign_start_date'  => $asset->campaign_start_date?->format('Y-m-d'),
-                'campaign_end_date'    => $asset->campaign_end_date?->format('Y-m-d'),
+                // The board filters on these locally so it stays correct
+                // offline, and knows nothing about Campaigns. Send the
+                // effective window — campaign narrowed by the asset's own
+                // override — under the keys it already reads.
+                'campaign_start_date'  => $flightFrom?->format('Y-m-d'),
+                'campaign_end_date'    => $flightUntil?->format('Y-m-d'),
                 'playback_times'       => $asset->playback_times ?? [],
                 'conflict_asset_ids'   => $asset->relationLoaded('conflicts')
                     ? $asset->conflicts->pluck('id')->all()

@@ -4,6 +4,7 @@ namespace Database\Seeders;
 
 use App\Models\Billboard;
 use App\Models\MediaAsset;
+use App\Models\Campaign;
 use App\Models\MediaLoop;
 use Illuminate\Database\Seeder;
 
@@ -17,9 +18,20 @@ class DemoSeeder extends Seeder
 {
     public function run(): void
     {
+        // ── Campaigns ───────────────────────────────────────────────────────
+        // A booking that owns the loops running during it. The fallback loop
+        // gets none: unsold inventory has no campaign.
+
+        $september = Campaign::create([
+            'name'      => 'September 2026',
+            'starts_on' => '2026-09-01',
+            'ends_on'   => '2026-09-30',
+        ]);
+
         // ── Loops ───────────────────────────────────────────────────────────
 
         $promoLoop = MediaLoop::create([
+            'campaign_id'      => $september->id,
             'name'             => 'Promo Campaigns',
             'is_fallback'      => false,
             'is_global'        => true,
@@ -27,6 +39,7 @@ class DemoSeeder extends Seeder
         ]);
 
         $brandLoop = MediaLoop::create([
+            'campaign_id'      => $september->id,
             'name'             => 'Brand Sponsorships',
             'is_fallback'      => false,
             'is_global'        => true,
@@ -47,7 +60,7 @@ class DemoSeeder extends Seeder
                 'file_path' => 'media/2026/01/coca-cola-summer.mp4', 'file_type' => 'VIDEO',
                 'loop_id' => $promoLoop->id, 'size_bytes' => 14_500_000,
                 'duration_secs' => 15, 'geo_campaign' => 'Downtown Core',
-                'campaign_name' => 'Summer Splash 2026', 'is_synced' => true,
+                'is_synced' => true,
                 'max_plays_per_hour' => 2, 'max_daily_plays' => null, 'play_spots_remaining' => 35,
                 'created_at' => now(), 'updated_at' => now(),
             ],
@@ -56,7 +69,7 @@ class DemoSeeder extends Seeder
                 'file_path' => 'media/2026/01/nike-flyknit.gif', 'file_type' => 'GIF',
                 'loop_id' => $promoLoop->id, 'size_bytes' => 2_400_000,
                 'duration_secs' => 10, 'geo_campaign' => 'West Coast Highways',
-                'campaign_name' => 'Run Free', 'is_synced' => true,
+                'is_synced' => true,
                 'max_plays_per_hour' => 3, 'max_daily_plays' => null, 'play_spots_remaining' => 50,
                 'created_at' => now(), 'updated_at' => now(),
             ],
@@ -65,7 +78,7 @@ class DemoSeeder extends Seeder
                 'file_path' => 'media/2026/01/bmw-i4.mp4', 'file_type' => 'VIDEO',
                 'loop_id' => $brandLoop->id, 'size_bytes' => 18_200_000,
                 'duration_secs' => 15, 'geo_campaign' => 'Metro Transit Terminals',
-                'campaign_name' => 'BMW Electric', 'is_synced' => true,
+                'is_synced' => true,
                 'max_plays_per_hour' => null, 'max_daily_plays' => null, 'play_spots_remaining' => 60,
                 'created_at' => now(), 'updated_at' => now(),
             ],
@@ -74,7 +87,7 @@ class DemoSeeder extends Seeder
                 'file_path' => 'media/2026/01/spotify-pride.png', 'file_type' => 'PHOTO',
                 'loop_id' => $brandLoop->id, 'size_bytes' => 900_000,
                 'duration_secs' => 8, 'geo_campaign' => 'Downtown Core',
-                'campaign_name' => 'Pride Music', 'is_synced' => true,
+                'is_synced' => true,
                 'max_plays_per_hour' => null, 'max_daily_plays' => null, 'play_spots_remaining' => 15,
                 'created_at' => now(), 'updated_at' => now(),
             ],
@@ -83,7 +96,7 @@ class DemoSeeder extends Seeder
                 'file_path' => 'media/2026/01/house-ad-1.png', 'file_type' => 'PHOTO',
                 'loop_id' => $fallbackLoop->id, 'size_bytes' => 400_000,
                 'duration_secs' => 8, 'geo_campaign' => 'All Zones',
-                'campaign_name' => 'Promo Fillers', 'is_synced' => true,
+                'is_synced' => true,
                 'max_plays_per_hour' => null, 'max_daily_plays' => null, 'play_spots_remaining' => 999999,
                 'created_at' => now(), 'updated_at' => now(),
             ],
@@ -92,7 +105,7 @@ class DemoSeeder extends Seeder
                 'file_path' => 'media/2026/01/weather-widget.gif', 'file_type' => 'GIF',
                 'loop_id' => $fallbackLoop->id, 'size_bytes' => 1_200_000,
                 'duration_secs' => 12, 'geo_campaign' => 'All Zones',
-                'campaign_name' => 'Promo Fillers', 'is_synced' => true,
+                'is_synced' => true,
                 'max_plays_per_hour' => null, 'max_daily_plays' => null, 'play_spots_remaining' => 999999,
                 'created_at' => now(), 'updated_at' => now(),
             ],

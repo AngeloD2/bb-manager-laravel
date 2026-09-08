@@ -50,7 +50,7 @@ class QueueGenerationService
                 $previousAssetId = $item['asset_id'];
                 continue;
             }
-            $asset = MediaAsset::with('conflicts')->find($item['asset_id']);
+            $asset = MediaAsset::with('conflicts', 'loop.campaign')->find($item['asset_id']);
             if (!$asset) {
                 continue;
             }

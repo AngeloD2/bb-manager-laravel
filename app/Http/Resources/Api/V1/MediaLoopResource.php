@@ -12,7 +12,7 @@ class MediaLoopResource extends JsonResource
         return [
             'id'               => $this->id,
             'name'             => $this->name,
-            'parent_loop_id' => $this->parent_loop_id,
+            'campaign_id'    => $this->campaign_id,
             'is_fallback'      => $this->is_fallback,
             'is_global'        => $this->is_global,
             'max_daily_spots' => $this->max_daily_spots,

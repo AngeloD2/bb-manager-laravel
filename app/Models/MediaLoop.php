@@ -16,7 +16,7 @@ class MediaLoop extends Model
 
     protected $fillable = [
         'name',
-        'parent_loop_id',
+        'campaign_id',
         'is_fallback',
         'is_global',
         'max_daily_spots',
@@ -33,14 +33,13 @@ class MediaLoop extends Model
 
     // ── Relationships ────────────────────────────────────────────────────────
 
-    public function parent(): BelongsTo
+    /**
+     * The booking this loop runs under, or null when the loop is unsold or
+     * perpetual inventory — which is what a Fallback loop is.
+     */
+    public function campaign(): BelongsTo
     {
-        return $this->belongsTo(MediaLoop::class, 'parent_loop_id');
-    }
-
-    public function children(): HasMany
-    {
-        return $this->hasMany(MediaLoop::class, 'parent_loop_id');
+        return $this->belongsTo(Campaign::class, 'campaign_id');
     }
 
     public function assets(): HasMany
