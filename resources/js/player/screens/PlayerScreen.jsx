@@ -245,10 +245,18 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   // actually begins. Images arm from their own onLoad, so for them this only
   // drops the pending timer on src change or unmount.
   useEffect(() => {
-    if (!isImage && src && !pausedRef.current) armVideoWatchdog();
+    if (isImage || !src || paused) return () => clearTimeout(advanceTimerRef.current);
+    // A freeze paused the element directly, and nothing on the resume path
+    // starts it again. A paused video fires neither 'play' nor 'ended', so an
+    // unfrozen board would sit on that frame -- the same freeze this watchdog
+    // exists to prevent, reached from the other direction. Depending on
+    // `paused` (the state, not the ref) is what makes this re-run on resume.
+    const el = videoRef.current;
+    if (el && el.paused) el.play().catch(() => {});
+    armVideoWatchdog();
     return () => clearTimeout(advanceTimerRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src, isImage]);
+  }, [src, isImage, paused]);
 
   // Record the play exactly once for the current asset instance (video onPlay
   // can fire again on resume; images only fire onLoad once).

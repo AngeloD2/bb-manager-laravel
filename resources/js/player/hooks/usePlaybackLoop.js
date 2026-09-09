@@ -64,7 +64,9 @@ export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) 
     setNoAsset(false);
     const myGen = ++genRef.current; // newest fetch wins; older in-flight ones are discarded
     triggerFetch(myGen);
-  }, [triggerFetch]);
+    // interruptRef is a prop, so it cannot be assumed stable the way a local
+    // useRef would be.
+  }, [triggerFetch, interruptRef]);
 
   // Keep a ref to the latest fetchNext so onSuccess/onError closures always call the current version
   useEffect(() => {
