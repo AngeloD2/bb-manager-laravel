@@ -30,15 +30,17 @@ export class Scheduler {
    * @param {Map}      opts.assetsById  asset_id -> media detail (file_type, duration_secs, ...)
    * @param {Array}    [opts.pendingEvents]  unsynced play events to replay onto the snapshot
    */
-  constructor({ schedule, quota, assetsById, pendingEvents = [] }) {
-    this.reseed({ schedule, quota, assetsById, pendingEvents });
+  constructor({ schedule, quota, assetsById, pendingEvents = [], history = [], onReject = null }) {
+    this.onReject = onReject;
+    this.reseed({ schedule, quota, assetsById, pendingEvents, history });
   }
 
   /** Reset to a fresh server snapshot, re-applying any still-unsynced plays. */
-  reseed({ schedule, quota, assetsById, pendingEvents = [] }) {
+  reseed({ schedule, quota, assetsById, pendingEvents = [], history = [] }) {
     const prevPrimaryId = this.lastPickedPrimaryId;
     const prevFallbackCursor = this.fallbackCursor || 0;
     const prevLastAssetId = this.lastAssetId;
+    this.history = Array.isArray(history) ? [...history] : [];
 
     this.schedule = schedule || { primary: [], fallback: [] };
     this.quota = quota || { seconds_per_spot: 15, assets: {}, loops: {} };
@@ -157,17 +159,17 @@ export class Scheduler {
 
   _eligible(assetId, now) {
     const detail = this.assetsById.get(assetId);
-    if (!detail) return false;
+    if (!detail) return 'missing_asset';
     const q = this.quota.assets?.[assetId] || {};
     const w = this.work.assets[assetId] || { spotsRemaining: Infinity, playsToday: 0 };
 
-    if (w.spotsRemaining <= 0) return false;
-    if (!this._withinCampaign(detail, now)) return false;
-    if (!this._withinPlaybackWindow(detail, now)) return false;
+    if (w.spotsRemaining <= 0) return 'no_spots_remaining';
+    if (!this._withinCampaign(detail, now)) return 'outside_flight_dates';
+    if (!this._withinPlaybackWindow(detail, now)) return 'outside_playback_window';
 
     if (q.max_plays_per_hour != null &&
         this._playsLastHour(assetId, now.getTime()) >= q.max_plays_per_hour) {
-      return false;
+      return 'hourly_exceeded';
     }
     // Pacing (rule 4): not yet due if less than PACING_FACTOR of the ideal
     // inter-play interval has elapsed since the last play. Spaces plays across the
@@ -175,24 +177,30 @@ export class Scheduler {
     if (q.max_plays_per_hour != null && q.max_plays_per_hour > 0 && w.lastPlayedAt != null) {
       const idealIntervalMs = 3600_000 / q.max_plays_per_hour;
       if (now.getTime() - w.lastPlayedAt < PACING_FACTOR * idealIntervalMs) {
-        return false;
+        return 'pacing_gap';
       }
     }
     if (q.max_daily_plays != null && w.playsToday >= q.max_daily_plays) {
-      return false;
+      return 'daily_exceeded';
     }
     // Loop daily spot cap (charged by footprint).
     const loopId = detail.loop_id;
     const loopQ = loopId != null ? this.quota.loops?.[loopId] : null;
     if (loopQ && loopQ.max_daily_spots != null) {
       const spent = this.work.loops[loopId]?.spotsToday ?? 0;
-      if (spent + this.footprint(assetId) > loopQ.max_daily_spots) return false;
+      if (spent + this.footprint(assetId) > loopQ.max_daily_spots) return 'loop_daily_exceeded';
     }
     // Don't play back-to-back with a conflicting asset.
-    if (this.lastAssetId && (q.conflict_asset_ids || []).includes(this.lastAssetId)) {
-      return false;
+    if (q.conflicts && q.conflicts.length > 0) {
+      for (const conflict of q.conflicts) {
+        const slots = Math.max(1, conflict.slots || 1);
+        const recentHistory = this.history.slice(-slots);
+        if (recentHistory.includes(conflict.id)) {
+          return 'conflict';
+        }
+      }
     }
-    return true;
+    return 'valid';
   }
 
   _build(assetId, isOverride) {
@@ -230,11 +238,21 @@ export class Scheduler {
    * null when nothing qualifies (genuine empty state).
    */
   pickNext(now = new Date()) {
-    // Overrides are absolute priority — drain the queue first, bypassing every
-    // constraint check (hourly/daily caps, pacing, spots, campaign dates, etc.).
-    if (this.overrideQueue.length > 0) {
-      return this.overrideQueue.shift();
+    // Overrides: find the first override that does not conflict with history.
+    // Conflicting overrides are deferred (held in queue).
+    for (let i = 0; i < this.overrideQueue.length; i++) {
+      const o = this.overrideQueue[i];
+      const reason = this._eligible(o.asset_id, now);
+      if (reason === 'valid' || reason !== 'conflict') {
+        // If it's valid, or if it failed for a reason other than conflict (we bypass
+        // non-conflict constraints for overrides), we can play it.
+        // Wait, issue says "defer overrides that conflict with history". 
+        // Only CONFLICT defers it. Other constraints are bypassed.
+        this.overrideQueue.splice(i, 1);
+        return o;
+      }
     }
+
     const loops = this.primaryLoops;
     if (loops.length > 0) {
       // Walk each loop at most once per call, starting from the current cursor.
@@ -247,7 +265,8 @@ export class Scheduler {
         const start = l === 0 ? this.assetIdx : 0;
         for (let a = start; a < loop.assetIds.length; a++) {
           const assetId = loop.assetIds[a];
-          if (this._eligible(assetId, now)) {
+          const reason = this._eligible(assetId, now);
+          if (reason === 'valid') {
             const nextAsset = a + 1;
             if (nextAsset >= loop.assetIds.length) {
               // Finished this loop's pass — advance to the next loop.
@@ -259,6 +278,8 @@ export class Scheduler {
             }
             this.lastPickedPrimaryId = assetId;
             return this._build(assetId, false);
+          } else {
+            if (this.onReject) this.onReject(assetId, reason);
           }
         }
       }
@@ -269,8 +290,14 @@ export class Scheduler {
       const idx = (this.fallbackCursor + i) % fallback.length;
       const assetId = fallback[idx].asset_id;
       if (this.assetsById.has(assetId)) {
-        this.fallbackCursor = (idx + 1) % fallback.length;
-        return this._build(assetId, false);
+        const reason = this._eligible(assetId, now);
+        if (reason === 'valid' || (reason !== 'conflict' && reason !== 'missing_asset')) {
+          // Fallbacks bypass pacing/caps, but MUST pass conflict check.
+          this.fallbackCursor = (idx + 1) % fallback.length;
+          return this._build(assetId, false);
+        } else if (reason === 'conflict') {
+          if (this.onReject) this.onReject(assetId, reason);
+        }
       }
     }
     return null;
@@ -308,6 +335,9 @@ export class Scheduler {
       const l = (this.work.loops[event.loop_id] ||= { spotsToday: 0 });
       l.spotsToday += event.footprint ?? 1;
     }
-    if (isLive) this.lastAssetId = event.asset_id;
+    if (isLive) {
+      this.lastAssetId = event.asset_id;
+      this.history.push(event.asset_id);
+    }
   }
 }

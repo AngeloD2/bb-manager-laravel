@@ -43,17 +43,16 @@ class QueueGenerationService
         $projLoopDaily = []; // loop_id  => slot footprint scheduled this batch
 
         $validQueue = [];
-        $previousAssetId = null;
+        $history = [];
 
+        // Pre-fetch assets to avoid N+1 queries
         $assetIds = collect($queue)->where('is_override', false)->pluck('asset_id')->unique()->all();
-        $prefetchedAssets = empty($assetIds)
-            ? collect()
-            : MediaAsset::with('conflicts', 'loop.campaign')->whereIn('id', $assetIds)->get()->keyBy('id');
+        $prefetchedAssets = empty($assetIds) ? collect() : MediaAsset::with('conflicts', 'loop.campaign')->whereIn('id', $assetIds)->get()->keyBy('id');
 
         foreach ($queue as $item) {
             if ($item['is_override']) {
                 $validQueue[] = $item;
-                $previousAssetId = $item['asset_id'];
+                $history[] = $item['asset_id'];
                 continue;
             }
             $asset = $prefetchedAssets->get($item['asset_id']);
@@ -63,10 +62,12 @@ class QueueGenerationService
             $ph = $projHourly[$asset->id] ?? 0;
             $pd = $projDaily[$asset->id] ?? 0;
             $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
-            if ($this->constraintValidator->validate($asset, $previousAssetId, null, $ph, $pd, $pl)
-                === ConstraintValidationService::VALID) {
+            
+            $validationResult = $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl);
+            
+            if ($validationResult === ConstraintValidationService::VALID) {
                 $validQueue[] = $item;
-                $previousAssetId = $item['asset_id'];
+                $history[] = $item['asset_id'];
                 $projHourly[$asset->id] = $ph + 1;
                 $projDaily[$asset->id] = $pd + 1;
                 if ($asset->loop_id) {
@@ -81,13 +82,18 @@ class QueueGenerationService
         if ($itemsToGenerate > 0) {
             // Find what is currently playing if the queue is totally empty
             if (empty($queue)) {
-                $previousAssetId = \App\Models\PlaybackLog::where('billboard_id', $billboard->id)
+                $history = \App\Models\PlaybackLog::where('billboard_id', $billboard->id)
+                    ->where('played_at', '>=', now()->subHour())
                     ->orderBy('played_at', 'desc')
-                    ->value('asset_id');
+                    ->limit(10)
+                    ->pluck('asset_id')
+                    ->reverse()
+                    ->values()
+                    ->all();
             }
 
             $newItems = $this->generateNextSequence(
-                $billboard, $itemsToGenerate, $previousAssetId,
+                $billboard, $itemsToGenerate, $history,
                 $projHourly, $projDaily, $projLoopDaily, $secondsPerSpot
             );
             $queue = array_merge($queue, $newItems);
@@ -202,7 +208,7 @@ class QueueGenerationService
     private function generateNextSequence(
         Billboard $billboard,
         int $count,
-        ?string $previousAssetId = null,
+        array $history = [],
         array $projHourly = [],
         array $projDaily = [],
         array $projLoopDaily = [],
@@ -270,6 +276,7 @@ class QueueGenerationService
         $generated = [];
         
         $currentIndex = -1;
+        $previousAssetId = !empty($history) ? end($history) : null;
         if ($previousAssetId) {
             $currentIndex = $masterPrimaryAssets->search(fn($a) => $a->id === $previousAssetId);
             if ($currentIndex === false) {
@@ -293,7 +300,8 @@ class QueueGenerationService
                 while ($attempts < $masterPrimaryAssets->count()) {
                     $currentIndex = ($currentIndex + 1) % $masterPrimaryAssets->count();
                     $candidate = $masterPrimaryAssets[$currentIndex];
-                    if ($this->isEligibleProjected($candidate, $previousAssetId, $projHourly, $projDaily, $projLoopDaily)
+                    $validationResult = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                    if ($validationResult === ConstraintValidationService::VALID
                         && $this->isDue($candidate, $virtualMs, $lastPlayedMs)) {
                         $selected = $candidate;
                         break;
@@ -309,7 +317,8 @@ class QueueGenerationService
                 while ($attempts < $masterFallbackAssets->count()) {
                     $fallbackIndex = ($fallbackIndex + 1) % $masterFallbackAssets->count();
                     $candidate = $masterFallbackAssets[$fallbackIndex];
-                    if ($this->isEligibleProjected($candidate, $previousAssetId, $projHourly, $projDaily, $projLoopDaily)) {
+                    $validationResult = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                    if ($validationResult === ConstraintValidationService::VALID) {
                         $selected = $candidate;
                         break;
                     }
@@ -327,7 +336,7 @@ class QueueGenerationService
             }
 
             if ($selected) {
-                $previousAssetId = $selected->id;
+                $history[] = $selected->id;
                 // Tally this scheduled spot so the next iteration sees the consumed
                 // hourly/daily/loop budget and yields to the fallback once capped.
                 $projHourly[$selected->id] = ($projHourly[$selected->id] ?? 0) + 1;
@@ -362,17 +371,16 @@ class QueueGenerationService
      */
     private function isEligibleProjected(
         MediaAsset $asset,
-        ?string $previousAssetId,
+        array $history,
         array $projHourly,
         array $projDaily,
         array $projLoopDaily
-    ): bool {
+    ): string {
         $ph = $projHourly[$asset->id] ?? 0;
         $pd = $projDaily[$asset->id] ?? 0;
         $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
 
-        return $this->constraintValidator->validate($asset, $previousAssetId, null, $ph, $pd, $pl)
-            === ConstraintValidationService::VALID;
+        return $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl);
     }
 
     /**

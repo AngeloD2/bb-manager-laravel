@@ -73,7 +73,13 @@ class MediaAsset extends Model
     public function conflicts(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
         return $this->belongsToMany(MediaAsset::class, 'asset_conflicts', 'asset_id_1', 'asset_id_2')
+            ->withPivot('separation_slots')
             ->withTimestamps();
+    }
+
+    public function rejectionStats(): HasMany
+    {
+        return $this->hasMany(QueueRejectionStat::class, 'asset_id');
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

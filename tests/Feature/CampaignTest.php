@@ -119,11 +119,11 @@ class CampaignTest extends TestCase
 
         $this->assertSame(
             ConstraintValidationService::OUTSIDE_FLIGHT_DATES,
-            $validator->validate($asset, null, Carbon::parse('2026-09-15'))
+            $validator->validate($asset, [], Carbon::parse('2026-09-15'))
         );
         $this->assertSame(
             ConstraintValidationService::VALID,
-            $validator->validate($asset, null, Carbon::parse('2026-10-15'))
+            $validator->validate($asset, [], Carbon::parse('2026-10-15'))
         );
     }
 

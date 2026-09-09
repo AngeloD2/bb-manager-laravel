@@ -1,0 +1,59 @@
+{
+  "assets": [
+    { "id": "asset-coke", "name": "Coke", "loop_id": "loop-1" },
+    { "id": "asset-pepsi", "name": "Pepsi", "loop_id": "loop-1" },
+    { "id": "asset-sprite", "name": "Sprite", "loop_id": "loop-1" },
+    { "id": "asset-fanta", "name": "Fanta", "loop_id": "loop-1" },
+    { "id": "asset-filler", "name": "Filler", "loop_id": null }
+  ],
+  "conflicts": [
+    { "asset_id_1": "asset-coke", "asset_id_2": "asset-pepsi", "separation_slots": 1 },
+    { "asset_id_1": "asset-coke", "asset_id_2": "asset-sprite", "separation_slots": 2 }
+  ],
+  "scenarios": [
+    {
+      "name": "Adjacency conflict (separation 1) - blocked immediately after",
+      "history": ["asset-coke"],
+      "candidate": "asset-pepsi",
+      "expected": false
+    },
+    {
+      "name": "Adjacency conflict (separation 1) - allowed after 1 spot",
+      "history": ["asset-coke", "asset-filler"],
+      "candidate": "asset-pepsi",
+      "expected": true
+    },
+    {
+      "name": "Separation 2 - blocked after 1 spot",
+      "history": ["asset-coke", "asset-filler"],
+      "candidate": "asset-sprite",
+      "expected": false
+    },
+    {
+      "name": "Separation 2 - allowed after 2 spots",
+      "history": ["asset-coke", "asset-filler", "asset-filler"],
+      "candidate": "asset-sprite",
+      "expected": true
+    },
+    {
+      "name": "Symmetry - blocked immediately after (pepsi then coke)",
+      "history": ["asset-pepsi"],
+      "candidate": "asset-coke",
+      "expected": false
+    },
+    {
+      "name": "Override - conflicts with history",
+      "history": ["asset-coke"],
+      "candidate": "asset-pepsi",
+      "is_override": true,
+      "expected": false
+    },
+    {
+      "name": "Fallback - conflicts with history",
+      "history": ["asset-coke"],
+      "candidate": "asset-pepsi",
+      "is_fallback": true,
+      "expected": false
+    }
+  ]
+}
