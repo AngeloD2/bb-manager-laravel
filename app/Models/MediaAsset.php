@@ -13,6 +13,13 @@ class MediaAsset extends Model
 {
     use HasUuids, SoftDeletes;
 
+    /**
+     * Spot allowance an asset gets when the caller does not specify one.
+     * Mirrors the media_assets.play_spots_remaining column default; anything
+     * <= 0 is treated as out of spots and never queued.
+     */
+    public const DEFAULT_PLAY_SPOTS = 100;
+
     protected $table = 'media_assets';
 
     protected $fillable = [

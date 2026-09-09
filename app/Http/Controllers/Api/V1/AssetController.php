@@ -255,7 +255,13 @@ class AssetController extends Controller
             'targeted_zones'          => $targetedZones,
             'max_plays_per_hour'    => $request->max_plays_per_hour,
             'max_daily_plays'       => $request->max_daily_plays,
-            'play_spots_remaining'  => $request->play_spots_remaining ?? 0,
+            // Falling back to 0 here made every asset created without an explicit
+            // allowance unplayable on arrival: ConstraintValidationService treats
+            // <= 0 as out of spots, so the asset uploaded fine, synced fine, and
+            // silently never appeared in a queue. The column's own default (100)
+            // is the intended "not specified" value.
+            'play_spots_remaining'  => $request->play_spots_remaining
+                                           ?? MediaAsset::DEFAULT_PLAY_SPOTS,
             'assigned_billboards'      => $assignedBillboards,
             'is_global'             => filter_var($request->is_global, FILTER_VALIDATE_BOOLEAN),
             'runs_from'             => $request->runs_from,
