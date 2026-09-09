@@ -20,6 +20,7 @@ class Billboard extends Model
         'timezone',
         'is_online',
         'is_frozen',
+        'is_blacked_out',
         'last_seen_at',
         'active_hours_start',
         'active_hours_end',
@@ -28,7 +29,8 @@ class Billboard extends Model
 
     protected $casts = [
         'is_online'    => 'boolean',
-        'is_frozen'    => 'boolean',
+        'is_frozen'      => 'boolean',
+        'is_blacked_out' => 'boolean',
         'last_seen_at' => 'datetime',
         'loop_orders'  => 'array',
     ];

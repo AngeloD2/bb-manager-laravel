@@ -48,6 +48,7 @@ class SyncController extends Controller
                     'id'        => $billboard->id,
                     'name'      => $billboard->name,
                     'is_frozen' => (bool) $billboard->is_frozen,
+                    'is_blacked_out' => (bool) $billboard->is_blacked_out,
                 ],
                 'loops'           => MediaLoopResource::collection($payload['loops']),
                 'eligible_assets'   => MediaAssetResource::collection($payload['eligible_assets']),

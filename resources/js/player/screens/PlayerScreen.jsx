@@ -15,6 +15,10 @@ const IMAGE_TYPES = new Set(['GIF', 'PHOTO']);
 // so ordinary buffering jitter never cuts a video short.
 const VIDEO_STALL_GRACE_MS = 2000;
 
+// How long past its own duration an image may spend not loading before the
+// loop gives up on it and moves on.
+const IMAGE_LOAD_GRACE_MS = 3000;
+
 export default function PlayerScreen({ apiUrl, token, syncData }) {
   const videoRef = useRef(null);
   const interruptRef = useRef(false);
@@ -33,6 +37,29 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   const [paused, setPaused] = useState(!!syncData?.billboard?.is_frozen);
   const pausedRef = useRef(paused);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
+
+  // Blacking out is a hold like freezing -- the loop stops either way -- but it
+  // shows nothing, and there is no frame left to continue from, so resuming
+  // replays the held asset from its start instead of picking it up mid-way.
+  const [blackedOut, setBlackedOut] = useState(!!syncData?.billboard?.is_blacked_out);
+
+  // Set when the next resume must restart the held asset rather than continue
+  // it. Only a blackout sets it; a freeze leaves the frame on screen.
+  const restartOnResumeRef = useRef(false);
+
+  // An image advances on a timer, so continuing one mid-duration means knowing
+  // how much of it was left when the hold landed. A video needs none of this:
+  // the element keeps its own currentTime.
+  const imageEndsAtRef = useRef(null);
+  const imageRemainingRef = useRef(null);
+
+  // Stop the pending image advance and remember what was left of it.
+  function holdImageTimer() {
+    clearTimeout(advanceTimerRef.current);
+    if (imageEndsAtRef.current != null) {
+      imageRemainingRef.current = Math.max(0, imageEndsAtRef.current - Date.now());
+    }
+  }
 
   const startMutation = useMutation({
     mutationFn: (assetId) => reportStart(apiUrl, token, assetId),
@@ -126,10 +153,29 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     // the frozen, empty schedule and lose the in-memory queue needed for an
     // instant resume.
     if (command === 'freeze' || command === 'pause') {
-      clearTimeout(advanceTimerRef.current);
+      holdImageTimer();
       if (videoRef.current) videoRef.current.pause();
+      restartOnResumeRef.current = false; // the frame stays up; continue from it
       setPaused(true);
       setSyncState((s) => (s?.billboard ? { ...s, billboard: { ...s.billboard, is_frozen: true } } : s));
+      return;
+    }
+    // Same hold as a freeze, but the panel goes dark and the held asset is
+    // replayed in full when it comes back.
+    if (command === 'blackout') {
+      holdImageTimer();
+      if (videoRef.current) videoRef.current.pause();
+      restartOnResumeRef.current = true;
+      setBlackedOut(true);
+      setPaused(true);
+      setSyncState((s) => (s?.billboard ? { ...s, billboard: { ...s.billboard, is_frozen: true, is_blacked_out: true } } : s));
+      return;
+    }
+    if (command === 'unblackout') {
+      setBlackedOut(false);
+      setPaused(false);
+      setSyncState((s) => (s?.billboard ? { ...s, billboard: { ...s.billboard, is_frozen: false, is_blacked_out: false } } : s));
+      refresh();
       return;
     }
     if (command === 'unfreeze' || command === 'resume') {
@@ -245,18 +291,50 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   // actually begins. Images arm from their own onLoad, so for them this only
   // drops the pending timer on src change or unmount.
   useEffect(() => {
-    if (isImage || !src || paused) return () => clearTimeout(advanceTimerRef.current);
+    if (!src || paused) return () => clearTimeout(advanceTimerRef.current);
+
+    // Coming off a hold, the asset is still the held one -- the loop no longer
+    // advances on resume -- so this decides how it comes back:
+    //   after a freeze   → continue where it stopped
+    //   after a blackout → replay it in full, since no frame was left up
+    const replay = restartOnResumeRef.current;
+    restartOnResumeRef.current = false;
+
+    if (isImage && !imageLoaded) {
+      // Neither 'load' nor 'error' has fired yet. Bound the wait so a request
+      // that simply stalls cannot hold the panel forever.
+      advanceTimerRef.current = setTimeout(advance, ((currentAsset?.duration_secs || 5) * 1000) + IMAGE_LOAD_GRACE_MS);
+      return () => clearTimeout(advanceTimerRef.current);
+    }
+
+    if (isImage) {
+      // Nothing to restart for an image; it is already painted. Re-arm what was
+      // left of its time, or the whole duration when replaying.
+      const ms = replay || imageRemainingRef.current == null
+        ? (currentAsset?.duration_secs || 5) * 1000
+        : imageRemainingRef.current;
+      imageRemainingRef.current = null;
+      if (imageLoaded) {
+        imageEndsAtRef.current = Date.now() + ms;
+        advanceTimerRef.current = setTimeout(advance, ms);
+      }
+      return () => clearTimeout(advanceTimerRef.current);
+    }
+
     // A freeze paused the element directly, and nothing on the resume path
     // starts it again. A paused video fires neither 'play' nor 'ended', so an
     // unfrozen board would sit on that frame -- the same freeze this watchdog
     // exists to prevent, reached from the other direction. Depending on
     // `paused` (the state, not the ref) is what makes this re-run on resume.
     const el = videoRef.current;
-    if (el && el.paused) el.play().catch(() => {});
+    if (el) {
+      if (replay) el.currentTime = 0;
+      if (el.paused) el.play().catch(() => {});
+    }
     armVideoWatchdog();
     return () => clearTimeout(advanceTimerRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src, isImage, paused]);
+  }, [src, isImage, paused, imageLoaded]);
 
   // Record the play exactly once for the current asset instance (video onPlay
   // can fire again on resume; images only fire onLoad once).
@@ -300,6 +378,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     if (pausedRef.current) return; // hold the frame; don't meter or arm an advance
     meterPlay();
     const ms = (currentAsset.duration_secs || 5) * 1000;
+    imageEndsAtRef.current = Date.now() + ms;
     advanceTimerRef.current = setTimeout(advance, ms);
   }
 
@@ -313,6 +392,16 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   function handleVideoError(e) {
     clearTimeout(advanceTimerRef.current);
     onVideoError(e);
+  }
+
+  // An image arms its advance from onLoad, so an image that never loads never
+  // arms one -- and the board sits on a blank frame indefinitely. A 404 asset
+  // (an object missing from the bucket) does exactly that: 'load' never fires,
+  // and without this nothing else would move the loop on either.
+  function handleImageError() {
+    clearTimeout(advanceTimerRef.current);
+    if (pausedRef.current) return;
+    advanceTimerRef.current = setTimeout(advance, 1000);
   }
 
   // 'fill' stretches the media to the full display surface, ignoring its own
@@ -349,6 +438,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
           alt=""
           style={{ ...mediaStyle, visibility: imageLoaded ? 'visible' : 'hidden' }}
           onLoad={handleImageLoad}
+          onError={handleImageError}
         />
       )}
       {!errorMessage && src && !isImage && (
@@ -365,6 +455,14 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
           onError={handleVideoError}
         />
       )}
+      {/* A blackout hides the panel without unmounting the media, so the held
+          asset is still there to replay when it comes back. */}
+      {blackedOut && (
+        <div style={{
+          position: 'absolute', inset: 0, background: '#000', zIndex: 10,
+        }} />
+      )}
+
       {!errorMessage && !src && noAsset && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',

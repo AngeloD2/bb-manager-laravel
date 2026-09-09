@@ -346,7 +346,7 @@ class BillboardSyncTest extends TestCase
         // deliberately zone-unaware. Asserted by key, not by structure: a
         // structure assertion passed happily while this key was present but
         // permanently null after the geo_zone column was dropped.
-        $this->assertSame(['id', 'name', 'is_frozen'], array_keys($billboard));
+        $this->assertSame(['id', 'name', 'is_frozen', 'is_blacked_out'], array_keys($billboard));
         $this->assertArrayNotHasKey('geo_zone', $billboard);
     }
 

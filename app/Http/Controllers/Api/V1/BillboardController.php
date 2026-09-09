@@ -57,6 +57,7 @@ class BillboardController extends Controller
                 'timezone'     => $d->timezone,
                 'is_online'    => $d->is_online,
                 'is_frozen'    => $d->is_frozen,
+                'is_blacked_out' => $d->is_blacked_out,
                 'last_seen_at' => $d->last_seen_at?->toIso8601String(),
                 'active_hours_start' => $d->active_hours_start,
                 'active_hours_end'   => $d->active_hours_end,
@@ -181,6 +182,7 @@ class BillboardController extends Controller
             'zone_id'  => ['sometimes', 'nullable', 'uuid', 'exists:zones,id'],
             'timezone'  => ['sometimes', 'nullable', 'string', 'max:50'],
             'is_frozen' => ['sometimes', 'boolean'],
+            'is_blacked_out' => ['sometimes', 'boolean'],
             'active_hours_start' => ['sometimes', 'nullable', 'date_format:H:i'],
             'active_hours_end'   => ['sometimes', 'nullable', 'date_format:H:i'],
             'password'  => ['sometimes', 'string', 'min:4', 'max:120'],
@@ -193,12 +195,30 @@ class BillboardController extends Controller
 
         $billboard->update($data);
 
-        if (isset($data['is_frozen'])) {
+        // Both holds stop the loop; they differ in what the panel shows and in
+        // what resuming does, so each end of each hold is its own command.
+        //   freeze     → hold, keep the current frame
+        //   unfreeze   → resume that frame where it left off
+        //   blackout   → hold, show nothing
+        //   unblackout → resume by replaying the held asset from its start,
+        //                since there is no frame left to continue from
+        $commandStr = null;
+
+        if (isset($data['is_blacked_out'])) {
+            $commandStr = $data['is_blacked_out'] ? 'blackout' : 'unblackout';
+        } elseif (isset($data['is_frozen'])) {
             $commandStr = $data['is_frozen'] ? 'freeze' : 'unfreeze';
-            if (config('broadcasting.default') === 'reverb') {
-                try {
-                    broadcast(new \App\Events\BillboardCommand($billboard, $commandStr));
-                } catch (\Throwable) {}
+        }
+
+        if ($commandStr !== null && config('broadcasting.default') === 'reverb') {
+            try {
+                broadcast(new \App\Events\BillboardCommand($billboard, $commandStr));
+            } catch (\Throwable $e) {
+                // A board that misses the push still picks the state up on its
+                // next sync, so a broadcast failure must not fail the request --
+                // but swallowing it silently hid a broken Reverb for a long
+                // time, so leave a trace.
+                report($e);
             }
         }
 
@@ -207,6 +227,7 @@ class BillboardController extends Controller
                 'id'        => $billboard->id,
                 'name'      => $billboard->name,
                 'is_frozen' => $billboard->is_frozen,
+                'is_blacked_out' => $billboard->is_blacked_out,
             ],
             'message' => 'Billboard updated.',
         ]);

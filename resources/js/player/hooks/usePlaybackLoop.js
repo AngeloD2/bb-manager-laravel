@@ -6,6 +6,10 @@ import { useMutation } from '@tanstack/react-query';
 // no transition flash). It may return the asset directly or a promise of it.
 export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) {
   const [currentAsset, setCurrentAsset] = useState(null);
+  // Mirror of currentAsset for the enable effect, which must read it without
+  // depending on it — depending on it would re-run the effect on every asset
+  // change and fetch a second time.
+  const currentAssetRef = useRef(null);
   // True only when the backend explicitly reports no asset to play. A plain
   // null currentAsset is ambiguous (it also covers the brief gap while the next
   // asset is being fetched), so we track the confirmed-empty case separately to
@@ -68,15 +72,25 @@ export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) 
     // useRef would be.
   }, [triggerFetch, interruptRef]);
 
+  useEffect(() => {
+    currentAssetRef.current = currentAsset;
+  }, [currentAsset]);
+
   // Keep a ref to the latest fetchNext so onSuccess/onError closures always call the current version
   useEffect(() => {
     fetchNextRef.current = fetchNext;
   }, [fetchNext]);
 
-  // Start (or resume) the loop only once assets are downloaded. When `enabled`
-  // flips back to true after a re-prefetch, this restarts playback.
+  // Start the loop once assets are downloaded, and restart it when `enabled`
+  // flips back after a re-prefetch.
+  //
+  // Only when nothing is currently playing, though. Coming back from a hold
+  // (freeze or blackout) also flips `enabled`, and there the held asset is
+  // still current: the screen has to continue or replay THAT asset, not skip
+  // to the next one. Fetching here unconditionally is what made resume advance
+  // the loop and lose the frame it was holding.
   useEffect(() => {
-    if (enabled) fetchNext();
+    if (enabled && !currentAssetRef.current) fetchNext();
     return () => clearTimeout(timeoutRef.current);
   }, [enabled, fetchNext]);
 
