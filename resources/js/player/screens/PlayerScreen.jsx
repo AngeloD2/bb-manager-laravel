@@ -216,24 +216,25 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   const { src, resolvedKey, notCached, downloading } = useEdgeCache(stableKey, fetchUrl, billboard.offline_mode, token);
 
   const isImage = currentAsset && IMAGE_TYPES.has(currentAsset.file_type);
-  const [imageLoaded, setImageLoaded] = useState(false);
+
+  // Tag the loaded flag with the src it was recorded against, so a new src
+  // reads as not-yet-loaded by derivation instead of via a reset effect.
+  const [loadedSrc, setLoadedSrc] = useState(null);
+  const imageLoaded = src !== null && loadedSrc === src;
 
   // We only want to increment the video element's key (which forces a remount/restart)
   // when the actual blob src is ready for the CURRENT play sequence. Otherwise,
   // incrementing the key while the src is still pointing to the OLD asset causes
-  // the player to flicker and restart the old asset.
+  // the player to flicker and restart the old asset. Adjusting the state during
+  // render (React's documented alternative to a reset effect) re-runs this
+  // component before anything is committed, so no extra frame is painted.
   const [renderedPlayId, setRenderedPlayId] = useState(playId);
-  useEffect(() => {
-    if (resolvedKey === stableKey) {
-      setRenderedPlayId(playId);
-    }
-  }, [resolvedKey, stableKey, playId]);
+  if (resolvedKey === stableKey && renderedPlayId !== playId) {
+    setRenderedPlayId(playId);
+  }
 
-  // Reset loaded state whenever the image src changes
-  useEffect(() => {
-    setImageLoaded(false);
-    return () => clearTimeout(imageTimerRef.current);
-  }, [src]);
+  // Drop any pending image-advance timer when the src changes or we unmount.
+  useEffect(() => () => clearTimeout(imageTimerRef.current), [src]);
 
   // Record the play exactly once for the current asset instance (video onPlay
   // can fire again on resume; images only fire onLoad once).
@@ -247,7 +248,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
 
   function handleImageLoad() {
     if (!currentAsset) return;
-    setImageLoaded(true);
+    setLoadedSrc(src);
     if (pausedRef.current) return; // hold the frame; don't meter or arm an advance
     meterPlay();
     const ms = (currentAsset.duration_secs || 5) * 1000;

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const CACHE_NAME = "bcc-edge-cache-v1";
 const CACHE_LIMIT = 3;
@@ -151,8 +151,11 @@ export async function prefetchAsset(stableKey, fetchUrl, token) {
  * Each item can be a string (backward compatible) or an object: { stableKey, fetchUrl }.
  */
 export function usePrefetchAssets(items, token) {
-  const [ready, setReady] = useState(false);
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  // Both pieces of state are tagged with the batch `key` they belong to, so a
+  // new batch invalidates them during render. Resetting them from the effect
+  // instead would cost an extra render pass on every loop change.
+  const [readyKey, setReadyKey] = useState(null);
+  const [progressState, setProgressState] = useState({ key: null, done: 0 });
 
   const normalizedItems = useMemo(() => {
     return (items || []).filter(Boolean).map((item) => {
@@ -164,21 +167,24 @@ export function usePrefetchAssets(items, token) {
   }, [items]);
 
   const key = normalizedItems.map((i) => i.stableKey).join("|");
+  const total = normalizedItems.length;
+
+  // `key` already describes the batch exactly, so the effect depends on this
+  // re-tagged snapshot rather than on `normalizedItems` directly: a new-but-
+  // equivalent array from the caller must not restart the downloads mid-flight.
+  const [batch, setBatch] = useState({ key, items: normalizedItems });
+  if (batch.key !== key) {
+    setBatch({ key, items: normalizedItems });
+  }
 
   useEffect(() => {
-    if (normalizedItems.length === 0) {
-      setReady(true);
-      setProgress({ done: 0, total: 0 });
-      return;
-    }
+    if (batch.items.length === 0) return undefined;
 
     let cancelled = false;
-    setReady(false);
-    setProgress({ done: 0, total: normalizedItems.length });
-
     let done = 0;
+
     Promise.all(
-      normalizedItems.map(async (item) => {
+      batch.items.map(async (item) => {
         try {
           await prefetchAsset(item.stableKey, item.fetchUrl, token);
         } catch (err) {
@@ -189,46 +195,45 @@ export function usePrefetchAssets(items, token) {
           );
         } finally {
           done += 1;
-          if (!cancelled) setProgress({ done, total: normalizedItems.length });
+          if (!cancelled) setProgressState({ key: batch.key, done });
         }
       }),
     ).then(() => {
-      if (!cancelled) setReady(true);
+      if (!cancelled) setReadyKey(batch.key);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [key, token]);
+  }, [batch, token]);
 
-  return { ready, progress };
+  const progress = useMemo(
+    () => ({ done: progressState.key === key ? progressState.done : 0, total }),
+    [progressState, key, total],
+  );
+
+  return { ready: total === 0 || readyKey === key, progress };
 }
 
 export function useEdgeCache(stableKey, fetchUrl, offlineMode, token) {
-  const [src, setSrc] = useState(() => blobCache.get(stableKey) ?? null);
-  const [resolvedKey, setResolvedKey] = useState(() => blobCache.has(stableKey) ? stableKey : null);
-  const [notCached, setNotCached] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  // `resolved` holds the last asset we actually resolved, tagged with the key
+  // it belongs to. It is deliberately NOT cleared when stableKey changes:
+  // holding the previous frame while the next blob loads is what prevents a
+  // black flash between assets. Callers compare resolvedKey against stableKey
+  // to tell whether src matches the asset they asked for. `downloadingKey` and
+  // `notCachedKey` are tagged the same way so a key change clears them during
+  // render rather than through a reset effect.
+  const [resolved, setResolved] = useState(null);
+  const [downloadingKey, setDownloadingKey] = useState(null);
+  const [notCachedKey, setNotCachedKey] = useState(null);
 
   const actualFetchUrl = fetchUrl || stableKey;
 
   useEffect(() => {
-    if (!stableKey) {
-      setSrc(null);
-      setResolvedKey(null);
-      setNotCached(false);
-      setDownloading(false);
-      return;
-    }
-
-    // Already resolved this session — serve synchronously
-    if (blobCache.has(stableKey)) {
-      setSrc(blobCache.get(stableKey));
-      setResolvedKey(stableKey);
-      setNotCached(false);
-      setDownloading(false);
-      return;
-    }
+    // Nothing to play, or already resolved this session and served straight
+    // out of blobCache by the derivation below — either way there is no state
+    // to push from here.
+    if (!stableKey || blobCache.has(stableKey)) return undefined;
 
     let isMounted = true;
 
@@ -240,16 +245,15 @@ export function useEdgeCache(stableKey, fetchUrl, offlineMode, token) {
     async function load() {
       try {
         if (!cacheApi) {
-          if (isMounted) setDownloading(true);
+          if (isMounted) setDownloadingKey(stableKey);
           const blob = await fetchAssetBlock(stableKey, actualFetchUrl, token, async (res) => {
             return await res.blob();
           });
           const objectUrl = getCachedObjectUrl(stableKey, blob);
           if (isMounted) {
-            setSrc(objectUrl);
-            setResolvedKey(stableKey);
-            setNotCached(false);
-            setDownloading(false);
+            setResolved({ key: stableKey, src: objectUrl });
+            setNotCachedKey(null);
+            setDownloadingKey(null);
           }
           return;
         }
@@ -260,15 +264,14 @@ export function useEdgeCache(stableKey, fetchUrl, offlineMode, token) {
         if (match) {
           const objectUrl = getCachedObjectUrl(stableKey, await match.blob());
           if (isMounted) {
-            setSrc(objectUrl);
-            setResolvedKey(stableKey);
-            setNotCached(false);
-            setDownloading(false);
+            setResolved({ key: stableKey, src: objectUrl });
+            setNotCachedKey(null);
+            setDownloadingKey(null);
           }
           return;
         }
 
-        if (isMounted) setDownloading(true);
+        if (isMounted) setDownloadingKey(stableKey);
 
         const blob = await fetchAssetBlock(stableKey, actualFetchUrl, token, async (res) => {
           // We clone to put into cache, and also return a blob to use immediately.
@@ -281,17 +284,16 @@ export function useEdgeCache(stableKey, fetchUrl, offlineMode, token) {
 
         const objectUrl = getCachedObjectUrl(stableKey, blob);
         if (isMounted) {
-          setSrc(objectUrl);
-          setResolvedKey(stableKey);
-          setNotCached(false);
-          setDownloading(false);
+          setResolved({ key: stableKey, src: objectUrl });
+          setNotCachedKey(null);
+          setDownloadingKey(null);
         }
       } catch (err) {
         console.error("[useEdgeCache] failed to load asset", stableKey, err);
         if (isMounted) {
-          setDownloading(false);
+          setDownloadingKey(null);
           if (offlineMode) {
-            setNotCached(true);
+            setNotCachedKey(stableKey);
           } else if (shouldAuthenticate(actualFetchUrl)) {
             // actualFetchUrl is a token-required proxy URL. A native <video>/<img>
             // element cannot send the bearer token, so assigning it as the raw src
@@ -299,30 +301,46 @@ export function useEdgeCache(stableKey, fetchUrl, offlineMode, token) {
             // fetching it authenticated (with the proxy fallback) above, so don't
             // render a guaranteed-401 request — clear the src and let the next
             // reconcile/scheduler tick pick the asset back up.
-            setSrc(null);
-            setResolvedKey(stableKey);
+            setResolved({ key: stableKey, src: null });
           } else {
             // Self-authenticating (presigned) URL — safe to let the browser load
             // it natively as a last resort (e.g. fetch blocked by CORS but the
             // native element can still play it).
-            setSrc(actualFetchUrl);
-            setResolvedKey(stableKey);
+            setResolved({ key: stableKey, src: actualFetchUrl });
           }
         }
       }
     }
 
-    // We intentionally do NOT setSrc(null) here. This retains the previous
-    // video frame on screen for a few milliseconds while the new Blob is pulled
-    // from the cache, preventing a black flash between videos.
-    setNotCached(false);
-    setDownloading(false);
     load();
 
     return () => {
       isMounted = false;
     };
-  }, [stableKey, actualFetchUrl, token]);
+  }, [stableKey, actualFetchUrl, offlineMode, token]);
 
-  return { src, resolvedKey, notCached, downloading };
+  // Everything the caller sees is derived, so stale state from a previous
+  // asset can never be reported against the current stableKey.
+  const cachedSrc =
+    stableKey && blobCache.has(stableKey) ? blobCache.get(stableKey) : null;
+
+  let src = null;
+  let resolvedKey = null;
+  if (stableKey) {
+    if (cachedSrc) {
+      src = cachedSrc;
+      resolvedKey = stableKey;
+    } else if (resolved) {
+      // Possibly the PREVIOUS asset — that is the point; see `resolved` above.
+      src = resolved.src;
+      resolvedKey = resolved.key;
+    }
+  }
+
+  return {
+    src,
+    resolvedKey,
+    notCached: !!stableKey && notCachedKey === stableKey,
+    downloading: !!stableKey && downloadingKey === stableKey,
+  };
 }
