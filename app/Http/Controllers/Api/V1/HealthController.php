@@ -29,12 +29,19 @@ class HealthController extends Controller
             DB::connection()->getPdo();
             $status['database']['healthy'] = true;
             $status['database']['message'] = 'Connected';
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $status['database']['message'] = $e->getMessage();
             $overallHealthy = false;
         }
 
         // 2. S3 Check
+        //
+        // Throwable, not Exception: a misconfigured disk fails while the client
+        // is being *built*, which is a TypeError -- an Error, not an Exception.
+        // Catching only Exception meant this endpoint 500'd on exactly the
+        // configuration problems it exists to report. A missing AWS_BUCKET threw
+        // "Argument #2 ($bucket) must be of type string, null given" and the
+        // health check died with it instead of naming it.
         try {
             $s3Disk = Storage::disk('s3');
             $s3Client = $s3Disk->getClient();
@@ -47,7 +54,7 @@ class HealthController extends Controller
             $s3Client->headBucket(['Bucket' => $bucket]);
             $status['s3']['healthy'] = true;
             $status['s3']['message'] = 'Connected';
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $status['s3']['message'] = $e->getMessage();
             $overallHealthy = false;
         }
@@ -67,7 +74,7 @@ class HealthController extends Controller
                 $response = Http::timeout(5)->head($cfUrl);
                 $status['cloudfront']['healthy'] = true;
                 $status['cloudfront']['message'] = 'Reachable (HTTP ' . $response->status() . ')';
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $status['cloudfront']['message'] = $e->getMessage();
                 $overallHealthy = false;
             }
