@@ -44,13 +44,19 @@ class QueueGenerationService
 
         $validQueue = [];
         $previousAssetId = null;
+
+        $assetIds = collect($queue)->where('is_override', false)->pluck('asset_id')->unique()->all();
+        $prefetchedAssets = empty($assetIds)
+            ? collect()
+            : MediaAsset::with('conflicts', 'loop.campaign')->whereIn('id', $assetIds)->get()->keyBy('id');
+
         foreach ($queue as $item) {
             if ($item['is_override']) {
                 $validQueue[] = $item;
                 $previousAssetId = $item['asset_id'];
                 continue;
             }
-            $asset = MediaAsset::with('conflicts', 'loop.campaign')->find($item['asset_id']);
+            $asset = $prefetchedAssets->get($item['asset_id']);
             if (!$asset) {
                 continue;
             }
