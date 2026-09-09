@@ -22,3 +22,23 @@ export function loadSession() {
 export function clearSession() {
   return metaDel(SESSION_KEY);
 }
+
+const HISTORY_KEY = "play_history";
+
+export function persistHistory(historyArray) {
+  return metaSet(HISTORY_KEY, {
+    history: historyArray,
+    saved_at: new Date().toISOString(),
+  });
+}
+
+export async function loadHistory() {
+  const data = await metaGet(HISTORY_KEY);
+  if (!data || !data.history) return [];
+  const savedAt = new Date(data.saved_at);
+  const oneHourAgo = new Date(Date.now() - 3600000);
+  if (savedAt < oneHourAgo) {
+    return []; // Stale
+  }
+  return data.history;
+}

@@ -88,7 +88,7 @@ class BillboardSyncService
             ->where('is_synced', true)
             ->whereHas('loop', fn ($q) => $q->where('is_fallback', false))
             ->get()
-            ->filter(fn (MediaAsset $asset) => $this->constraintValidator->isEligible($asset, null, $billboard->timezone))
+            ->filter(fn (MediaAsset $asset) => $this->constraintValidator->isEligible($asset, [], $billboard->timezone))
             ->filter($isAssignedToBillboard)
             ->values();
 
@@ -208,9 +208,9 @@ class BillboardSyncService
                 'campaign_start_date'  => $flightFrom?->format('Y-m-d'),
                 'campaign_end_date'    => $flightUntil?->format('Y-m-d'),
                 'playback_times'       => $asset->playback_times ?? [],
-                'conflict_asset_ids'   => $asset->relationLoaded('conflicts')
-                    ? $asset->conflicts->pluck('id')->all()
-                    : $asset->conflicts()->pluck('media_assets.id')->all(),
+                'conflicts'            => $asset->relationLoaded('conflicts')
+                    ? $asset->conflicts->map(fn($c) => ['id' => $c->id, 'slots' => (int) $c->pivot->separation_slots])->all()
+                    : $asset->conflicts()->get()->map(fn($c) => ['id' => $c->id, 'slots' => (int) $c->pivot->separation_slots])->all(),
             ];
         }
 

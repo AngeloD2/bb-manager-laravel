@@ -31,7 +31,7 @@ class ConstraintValidationService
      */
     public function validate(
         MediaAsset $asset,
-        ?string $previousAssetId = null,
+        array $history = [],
         ?\Carbon\Carbon $now = null,
         int $projectedHourly = 0,
         int $projectedDaily = 0,
@@ -85,16 +85,19 @@ class ConstraintValidationService
             }
         }
 
-        // 5. Asset Conflicts (Do not play back-to-back with conflicts)
-        if ($previousAssetId && $asset->relationLoaded('conflicts')) {
-            if ($asset->conflicts->contains('id', $previousAssetId)) {
-                return self::CONFLICT;
-            }
-        } elseif ($previousAssetId) {
-            // Fallback if not eager loaded, but we should always eager load for performance
-            $conflicts = $asset->conflicts()->pluck('media_assets.id')->toArray();
-            if (in_array($previousAssetId, $conflicts)) {
-                return self::CONFLICT;
+        // 5. Asset Conflicts (Check against history array up to separation_slots)
+        if (!empty($history)) {
+            $conflicts = $asset->relationLoaded('conflicts') 
+                ? $asset->conflicts 
+                : $asset->conflicts()->get();
+
+            foreach ($conflicts as $conflict) {
+                $slots = max(1, $conflict->pivot->separation_slots ?? 1);
+                // Check if the conflict is in the last $slots positions of history
+                $recentHistory = array_slice($history, -$slots);
+                if (in_array($conflict->id, $recentHistory, true)) {
+                    return self::CONFLICT;
+                }
             }
         }
 
@@ -102,8 +105,8 @@ class ConstraintValidationService
     }
 
     /** Convenience: returns true only when fully eligible. */
-    public function isEligible(MediaAsset $asset, ?string $previousAssetId = null, ?string $timezone = null): bool
+    public function isEligible(MediaAsset $asset, array $history = [], ?string $timezone = null): bool
     {
-        return $this->validate($asset, $previousAssetId, null, 0, 0, 0, $timezone) === self::VALID;
+        return $this->validate($asset, $history, null, 0, 0, 0, $timezone) === self::VALID;
     }
 }
