@@ -73,6 +73,9 @@ class QueueGenerationService
                 if ($asset->loop_id) {
                     $projLoopDaily[$asset->loop_id] = $pl + $asset->spotFootprint($secondsPerSpot);
                 }
+            } else {
+                // If rejected in existing queue, we also tally it for issue 16 (rejection tracking)
+                $this->tallyRejection($billboard->id, $asset->id, $validationResult);
             }
         }
         $queue = $validQueue;
@@ -305,6 +308,8 @@ class QueueGenerationService
                         && $this->isDue($candidate, $virtualMs, $lastPlayedMs)) {
                         $selected = $candidate;
                         break;
+                    } elseif ($validationResult !== ConstraintValidationService::VALID) {
+                        $this->tallyRejection($billboard->id, $candidate->id, $validationResult);
                     }
                     $attempts++;
                 }
@@ -321,6 +326,8 @@ class QueueGenerationService
                     if ($validationResult === ConstraintValidationService::VALID) {
                         $selected = $candidate;
                         break;
+                    } elseif ($validationResult !== ConstraintValidationService::VALID) {
+                        $this->tallyRejection($billboard->id, $candidate->id, $validationResult);
                     }
                     $attempts++;
                 }
@@ -432,5 +439,22 @@ class QueueGenerationService
 
         // No assignment at all — not visible
         return false;
+    }
+
+    private function tallyRejection(string $billboardId, string $assetId, string $reason): void
+    {
+        if ($reason === ConstraintValidationService::VALID) {
+            return;
+        }
+
+        $date = now()->format('Y-m-d');
+        \Illuminate\Support\Facades\DB::table('queue_rejection_stats')
+            ->upsert(
+                [
+                    ['billboard_id' => $billboardId, 'asset_id' => $assetId, 'reason' => $reason, 'date' => $date, 'count' => 1]
+                ],
+                ['billboard_id', 'asset_id', 'reason', 'date'],
+                ['count' => \Illuminate\Support\Facades\DB::raw('count + 1')]
+            );
     }
 }

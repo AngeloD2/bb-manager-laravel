@@ -101,6 +101,10 @@ class SyncController extends Controller
             'logs.*.client_event_id'    => ['required', 'uuid'],
             'logs.*.played_at'          => ['required', 'date'],
             'logs.*.was_override'       => ['sometimes', 'boolean'],
+            'rejections'                => ['nullable', 'array', 'max:500'],
+            'rejections.*.asset_id'     => ['required', 'uuid', 'exists:media_assets,id'],
+            'rejections.*.reason'       => ['required', 'string'],
+            'rejections.*.count'        => ['required', 'integer', 'min:1'],
         ]);
 
         if ($validator->fails()) {
@@ -110,7 +114,7 @@ class SyncController extends Controller
         /** @var \App\Models\Billboard $billboard */
         $billboard = $request->user();
 
-        $result = $this->tokenManager->processBatch($billboard, $request->input('logs'));
+        $result = $this->tokenManager->processBatch($billboard, $request->input('logs'), $request->input('rejections', []));
 
         return response()->json([
             'data'    => array_merge($result, [

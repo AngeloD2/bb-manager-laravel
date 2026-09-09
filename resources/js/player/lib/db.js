@@ -204,3 +204,23 @@ export function queuePurgeSynced() {
     return {};
   }).catch(() => lsFallback.queuePurgeSynced());
 }
+
+const REJECTIONS_KEY = "rejection_stats";
+
+export async function addRejection(assetId, reason) {
+  const data = (await metaGet(REJECTIONS_KEY)) || {};
+  const key = `${assetId}:${reason}`;
+  if (!data[key]) data[key] = { asset_id: assetId, reason, count: 0 };
+  data[key].count++;
+  await metaSet(REJECTIONS_KEY, data);
+}
+
+export async function getRejections() {
+  const data = await metaGet(REJECTIONS_KEY);
+  if (!data) return [];
+  return Object.values(data);
+}
+
+export async function clearRejections() {
+  await metaDel(REJECTIONS_KEY);
+}
