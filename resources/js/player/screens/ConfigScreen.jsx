@@ -81,9 +81,17 @@ const s = {
 };
 
 export default function ConfigScreen({ onConnected }) {
-  const apiUrl = (
-    import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api/v1"
-  ).trim();
+  // Relative on purpose. Laravel serves this SPA and the API from one origin,
+  // so the relative path is correct in every environment and there is no host
+  // to rewrite when the board's address changes -- the whole reason the player
+  // moved into this app.
+  //
+  // The fallback matters more than it looks: Vite inlines VITE_* at BUILD time,
+  // while hosts that inject env vars at runtime (Laravel Cloud among them) have
+  // not set it yet when the build runs. An absolute localhost fallback is then
+  // baked into the deployed bundle, and every board asks its own machine for
+  // the API over plain http from an https page.
+  const apiUrl = (import.meta.env.VITE_API_URL || "/api/v1").trim();
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
