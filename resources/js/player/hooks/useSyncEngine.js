@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { sync, flushLogs } from "../api";
-import { queueUnsynced, queueMarkSynced, queuePurgeSynced } from "../lib/db";
+import { queueUnsynced, queueMarkSynced, queuePurgeSynced, getRejections, clearRejections } from "../lib/db";
 
 // Opportunistic background synchronizer. Two jobs:
 //
@@ -30,10 +30,10 @@ export function useSyncEngine({
     if (!apiUrl || !token || flushingRef.current) return;
     flushingRef.current = true;
     try {
-      const events = await queueUnsynced();
-      if (events.length === 0) return;
+      const [events, rejections] = await Promise.all([queueUnsynced(), getRejections()]);
+      if (events.length === 0 && rejections.length === 0) return;
 
-      const res = await flushLogs(apiUrl, token, events);
+      const res = await flushLogs(apiUrl, token, events, rejections);
       const results = res?.data?.results || [];
       // Any event the server returned a verdict for is durably handled
       // (new/duplicate/rejected). If it echoed nothing, assume the batch we
@@ -46,6 +46,9 @@ export function useSyncEngine({
       await queueMarkSynced(ids);
       dropSynced(ids);
       await queuePurgeSynced();
+      if (rejections.length > 0) {
+        await clearRejections();
+      }
     } catch (err) {
       // Offline is the normal case here and must not disturb playback: the
       // queue keeps the plays and the next flush sends them. A rejected token

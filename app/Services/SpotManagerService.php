@@ -38,7 +38,7 @@ class SpotManagerService
      * @param  array<int, array{asset_id: string, played_at: string, was_override?: bool, client_event_id?: string}>  $entries
      * @return array{accepted: int, rejected: int, errors: array<string>, results: array<int, array{client_event_id: ?string, status: string, reason?: string}>}
      */
-    public function processBatch(Billboard $billboard, array $entries): array
+    public function processBatch(Billboard $billboard, array $entries, array $rejections = []): array
     {
         $accepted = 0;
         $rejected = 0;
@@ -64,6 +64,25 @@ class SpotManagerService
                     'entry'     => $entry,
                     'error'     => $e->getMessage(),
                 ]);
+            }
+        }
+
+        if (!empty($rejections)) {
+            $date = now()->format('Y-m-d');
+            foreach ($rejections as $rej) {
+                DB::table('queue_rejection_stats')->upsert(
+                    [
+                        [
+                            'billboard_id' => $billboard->id,
+                            'asset_id'     => $rej['asset_id'],
+                            'reason'       => $rej['reason'],
+                            'date'         => $date,
+                            'count'        => $rej['count']
+                        ]
+                    ],
+                    ['billboard_id', 'asset_id', 'reason', 'date'],
+                    ['count' => DB::raw("count + {$rej['count']}")]
+                );
             }
         }
 

@@ -55,7 +55,7 @@ export async function reportStart(apiUrl, token, assetId) {
 // Flush a batch of locally-recorded play events. Each carries a client_event_id
 // so the server can dedup and charge each spot exactly once, even on retry.
 // Returns the parsed response: { data: { results, billboard_state, ... } }.
-export async function flushLogs(apiUrl, token, events) {
+export async function flushLogs(apiUrl, token, events, rejections = []) {
   const res = await fetch(`${apiUrl}/logs`, {
     method: 'POST',
     headers: {
@@ -70,6 +70,7 @@ export async function flushLogs(apiUrl, token, events) {
         played_at: e.played_at,
         was_override: e.was_override ?? false,
       })),
+      rejections: rejections || [],
     }),
   });
   // A rejected token is not transient: the board has been displaced (it holds

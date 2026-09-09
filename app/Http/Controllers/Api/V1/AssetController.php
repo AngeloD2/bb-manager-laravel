@@ -34,7 +34,7 @@ class AssetController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = MediaAsset::with(['loop', 'conflicts'])->latest();
+        $query = MediaAsset::with(['loop', 'conflicts', 'rejectionStats'])->latest();
 
         if ($request->filled('loop_id')) {
             $query->where('loop_id', $request->loop_id);
