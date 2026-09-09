@@ -11,10 +11,14 @@ import { persistSession } from '../lib/session';
 
 const IMAGE_TYPES = new Set(['GIF', 'PHOTO']);
 
+// Slack on top of a video's own runtime before the watchdog calls it stalled,
+// so ordinary buffering jitter never cuts a video short.
+const VIDEO_STALL_GRACE_MS = 2000;
+
 export default function PlayerScreen({ apiUrl, token, syncData }) {
   const videoRef = useRef(null);
   const interruptRef = useRef(false);
-  const imageTimerRef = useRef(null);
+  const advanceTimerRef = useRef(null);
   const recordedRef = useRef(null); // guards against double-recording one play
 
   const [syncState, setSyncState] = useState(syncData);
@@ -122,7 +126,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     // the frozen, empty schedule and lose the in-memory queue needed for an
     // instant resume.
     if (command === 'freeze' || command === 'pause') {
-      clearTimeout(imageTimerRef.current);
+      clearTimeout(advanceTimerRef.current);
       if (videoRef.current) videoRef.current.pause();
       setPaused(true);
       setSyncState((s) => (s?.billboard ? { ...s, billboard: { ...s.billboard, is_frozen: true } } : s));
@@ -180,7 +184,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
 
     // For 'sync' and other loop-cutting commands:
     interruptRef.current = true;
-    clearTimeout(imageTimerRef.current);
+    clearTimeout(advanceTimerRef.current);
     if (videoRef.current) videoRef.current.pause();
     interrupt(); // cut mid-loop immediately
     refresh();
@@ -233,8 +237,18 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     setRenderedPlayId(playId);
   }
 
-  // Drop any pending image-advance timer when the src changes or we unmount.
-  useEffect(() => () => clearTimeout(imageTimerRef.current), [src]);
+  // Arm the bound as soon as a video is on screen rather than only once it
+  // starts playing: a video that never fires 'play' at all -- autoplay refused,
+  // a source that stalls before the first frame -- is exactly the freeze this
+  // guards against, and arming from the play handler alone would miss it.
+  // handleVideoPlay re-arms with the element's real duration once playback
+  // actually begins. Images arm from their own onLoad, so for them this only
+  // drops the pending timer on src change or unmount.
+  useEffect(() => {
+    if (!isImage && src && !pausedRef.current) armVideoWatchdog();
+    return () => clearTimeout(advanceTimerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, isImage]);
 
   // Record the play exactly once for the current asset instance (video onPlay
   // can fire again on resume; images only fire onLoad once).
@@ -246,17 +260,51 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
     startMutation.mutate(currentAsset.asset_id);
   }
 
+  // Every advance funnels through here so the pending timer is always dropped
+  // before the loop moves on, whether the media ended on its own or the
+  // watchdog below had to force it.
+  function advance() {
+    clearTimeout(advanceTimerRef.current);
+    if (pausedRef.current) return; // a frozen board holds its frame
+    onVideoEnded();
+  }
+
+  // Video advance is driven by the element's 'ended' event, which never fires
+  // if playback pauses or stalls WITHOUT erroring -- a backgrounded tab, a
+  // stalled stream, a mid-playback decode hiccup. 'error' covers hard failures;
+  // nothing covered a silent stall, so the board froze on that frame
+  // indefinitely while /sync/ping kept reporting it healthy. Images have always
+  // advanced on a timer; this gives video the same guarantee.
+  //
+  // The element's own duration is the truth when it is known; duration_secs is
+  // the fallback for a stream whose length the browser cannot report yet.
+  function armVideoWatchdog() {
+    clearTimeout(advanceTimerRef.current);
+    const el = videoRef.current;
+    const natural = el && Number.isFinite(el.duration) && el.duration > 0 ? el.duration : null;
+    const secs = natural || currentAsset?.duration_secs || 5;
+    advanceTimerRef.current = setTimeout(advance, secs * 1000 + VIDEO_STALL_GRACE_MS);
+  }
+
   function handleImageLoad() {
     if (!currentAsset) return;
     setLoadedSrc(src);
     if (pausedRef.current) return; // hold the frame; don't meter or arm an advance
     meterPlay();
     const ms = (currentAsset.duration_secs || 5) * 1000;
-    imageTimerRef.current = setTimeout(onVideoEnded, ms);
+    advanceTimerRef.current = setTimeout(advance, ms);
   }
 
+  // 'play' fires again when a paused video resumes, so re-arm rather than
+  // assume the first arming still describes the remaining runtime.
   function handleVideoPlay() {
     meterPlay();
+    armVideoWatchdog();
+  }
+
+  function handleVideoError(e) {
+    clearTimeout(advanceTimerRef.current);
+    onVideoError(e);
   }
 
   // 'fill' stretches the media to the full display surface, ignoring its own
@@ -305,8 +353,8 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
           playsInline
           style={mediaStyle}
           onPlay={handleVideoPlay}
-          onEnded={onVideoEnded}
-          onError={onVideoError}
+          onEnded={advance}
+          onError={handleVideoError}
         />
       )}
       {!errorMessage && !src && noAsset && (
