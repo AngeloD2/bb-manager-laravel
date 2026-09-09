@@ -68,6 +68,16 @@ const s = {
     fontFamily: "system-ui, sans-serif",
   },
   buttonDisabled: { opacity: 0.5, cursor: "not-allowed" },
+  notice: {
+    background: "#1a1a0a",
+    border: "1px solid #4a4420",
+    borderRadius: 6,
+    padding: "10px 12px",
+    color: "#d4c489",
+    fontSize: 13,
+    marginBottom: 20,
+    fontFamily: "system-ui, sans-serif",
+  },
   error: {
     background: "#2a0a0a",
     border: "1px solid #5a1a1a",
@@ -80,7 +90,7 @@ const s = {
   },
 };
 
-export default function ConfigScreen({ onConnected }) {
+export default function ConfigScreen({ onConnected, notice }) {
   // Relative on purpose. Laravel serves this SPA and the API from one origin,
   // so the relative path is correct in every environment and there is no host
   // to rewrite when the board's address changes -- the whole reason the player
@@ -130,6 +140,7 @@ export default function ConfigScreen({ onConnected }) {
         <div style={s.subtitle}>
           Connect to your billboard backend to start playback.
         </div>
+        {notice && !error && <div style={s.notice}>{notice}</div>}
         {error && <div style={s.error}>{error}</div>}
         <form onSubmit={handleSubmit}>
           <div style={s.group}>

@@ -19,7 +19,7 @@ const VIDEO_STALL_GRACE_MS = 2000;
 // loop gives up on it and moves on.
 const IMAGE_LOAD_GRACE_MS = 3000;
 
-export default function PlayerScreen({ apiUrl, token, syncData }) {
+export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
   const videoRef = useRef(null);
   const interruptRef = useRef(false);
   const advanceTimerRef = useRef(null);
@@ -27,7 +27,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
 
   const [syncState, setSyncState] = useState(syncData);
   const billboard = syncState?.billboard || {};
-  const { isOnline } = useConnectionStatus({ apiUrl, token });
+  const { isOnline } = useConnectionStatus({ apiUrl, token, onAuthLost });
 
   // Paused (a.k.a. "frozen") holds the current frame on screen without
   // advancing the loop. Seeded from the server's persisted is_frozen so a
@@ -141,7 +141,7 @@ export default function PlayerScreen({ apiUrl, token, syncData }) {
   }, [apiUrl, token, syncState]);
 
   const { refresh } = useSyncEngine({
-    apiUrl, token, isOnline, paused, dropSynced, onReconcile,
+    apiUrl, token, isOnline, paused, dropSynced, onReconcile, onAuthLost,
   });
 
   const handleCommand = useCallback((command, payload) => {

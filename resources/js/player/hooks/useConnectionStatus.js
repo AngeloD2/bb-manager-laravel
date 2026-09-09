@@ -9,7 +9,7 @@ import { ping } from '../api';
 //
 // Returns { isOnline, lastReachableAt, serverTime }. Called with no args it
 // degrades to the legacy navigator-only behavior.
-export function useConnectionStatus({ apiUrl, token, intervalMs = 20000 } = {}) {
+export function useConnectionStatus({ apiUrl, token, intervalMs = 20000, onAuthLost } = {}) {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastReachableAt, setLastReachableAt] = useState(null);
   const [serverTime, setServerTime] = useState(null);
@@ -48,8 +48,21 @@ export function useConnectionStatus({ apiUrl, token, intervalMs = 20000 } = {}) 
         setIsOnline(true);
         setLastReachableAt(Date.now());
         if (res?.server_time) setServerTime(res.server_time);
-      } catch {
-        if (!cancelled) setIsOnline(false);
+      } catch (err) {
+        if (cancelled) return;
+        // A refused token is not a connectivity problem -- the server answered,
+        // so the board is plainly reachable. Reporting it as offline was worse
+        // than cosmetic: everything that could recover (the log flush, the
+        // periodic reconcile) is gated on isOnline, so a displaced board went
+        // quiet in exactly the state where it most needed to speak up, and its
+        // play queue grew for as long as it stayed up.
+        if (err?.message === 'AUTH') {
+          setIsOnline(true);
+          setLastReachableAt(Date.now());
+          onAuthLost?.();
+          return;
+        }
+        setIsOnline(false);
       }
     }
 
@@ -59,7 +72,7 @@ export function useConnectionStatus({ apiUrl, token, intervalMs = 20000 } = {}) 
       cancelled = true;
       clearInterval(id);
     };
-  }, [apiUrl, token, intervalMs]);
+  }, [apiUrl, token, intervalMs, onAuthLost]);
 
   return { isOnline, lastReachableAt, serverTime };
 }

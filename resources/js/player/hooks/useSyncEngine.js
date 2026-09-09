@@ -18,6 +18,7 @@ export function useSyncEngine({
   apiUrl,
   token,
   isOnline,
+  onAuthLost,
   paused = false,
   dropSynced,
   onReconcile,
@@ -46,11 +47,18 @@ export function useSyncEngine({
       dropSynced(ids);
       await queuePurgeSynced();
     } catch (err) {
+      // Offline is the normal case here and must not disturb playback: the
+      // queue keeps the plays and the next flush sends them. A rejected token
+      // is different -- it never recovers on its own.
+      if (err?.message === 'AUTH') {
+        onAuthLost?.();
+        return;
+      }
       console.warn("[syncEngine] flush failed; will retry", err);
     } finally {
       flushingRef.current = false;
     }
-  }, [apiUrl, token, dropSynced]);
+  }, [apiUrl, token, dropSynced, onAuthLost]);
 
   const refresh = useCallback(async () => {
     if (!apiUrl || !token) return;
@@ -60,9 +68,13 @@ export function useSyncEngine({
       // The fresh snapshot already excludes synced plays; clear any leftovers.
       flush();
     } catch (err) {
+      if (err?.message === 'AUTH') {
+        onAuthLost?.();
+        return;
+      }
       console.warn("[syncEngine] refresh failed", err);
     }
-  }, [apiUrl, token, onReconcile, flush]);
+  }, [apiUrl, token, onReconcile, flush, onAuthLost]);
 
   // Flush as soon as the link comes back (and on first mount if already online).
   useEffect(() => {

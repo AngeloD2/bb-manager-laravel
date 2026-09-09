@@ -32,6 +32,10 @@ export async function ping(apiUrl, token) {
   const res = await fetch(`${apiUrl}/sync/ping`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
+  // Distinguished from a transport failure on purpose: a 401 means the server
+  // answered, so the board is reachable and its token is what died. Callers
+  // must not read this as "offline".
+  if (res.status === 401) throw new Error('AUTH');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -68,6 +72,10 @@ export async function flushLogs(apiUrl, token, events) {
       })),
     }),
   });
+  // A rejected token is not transient: the board has been displaced (it holds
+  // exactly one token, so pairing its key elsewhere revokes this one) and
+  // retrying forever would only grow the queue in silence.
+  if (res.status === 401) throw new Error('AUTH');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
