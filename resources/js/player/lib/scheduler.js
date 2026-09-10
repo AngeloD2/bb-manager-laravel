@@ -25,10 +25,12 @@ function ymd(date) {
 export class Scheduler {
   /**
    * @param {object}   opts
-   * @param {object}   opts.schedule    { primary:[{asset_id,loop_id}], fallback:[...] }
-   * @param {object}   opts.quota       server snapshot { seconds_per_spot, assets, loops, ... }
-   * @param {Map}      opts.assetsById  asset_id -> media detail (file_type, duration_secs, ...)
+   * @param {object}   opts.schedule         { primary:[...], campaign_fallback:[...], global_fallback:[...], fallback:[...], loops:{...} }
+   * @param {object}   opts.quota            server snapshot { seconds_per_spot, assets, loops, ... }
+   * @param {Map}      opts.assetsById       asset_id -> media detail (file_type, duration_secs, ...)
    * @param {Array}    [opts.pendingEvents]  unsynced play events to replay onto the snapshot
+   * @param {Array}    [opts.history]        initial playback history of asset IDs
+   * @param {Function} [opts.onReject]       callback (assetId, reason) => void
    */
   constructor({ schedule, quota, assetsById, pendingEvents = [], history = [], onReject = null }) {
     this.onReject = onReject;
@@ -38,7 +40,7 @@ export class Scheduler {
   /** Reset to a fresh server snapshot, re-applying any still-unsynced plays. */
   reseed({ schedule, quota, assetsById, pendingEvents = [], history = [] }) {
     const prevPrimaryId = this.lastPickedPrimaryId;
-    const prevFallbackCursor = this.fallbackCursor || 0;
+    const prevFallbackCursor = this.globalFallbackCursor || this.fallbackCursor || 0;
     const prevLastAssetId = this.lastAssetId;
     this.history = Array.isArray(history) ? [...history] : [];
 
@@ -46,44 +48,44 @@ export class Scheduler {
     this.quota = quota || { seconds_per_spot: 15, assets: {}, loops: {} };
     this.assetsById = assetsById || new Map();
 
-    // Group the flat primary schedule into ordered loops so we can finish every
-    // eligible asset of a loop before advancing to the next (rules 1 & 2). Grouping
-    // by loop_id (preserving first-seen order) is robust even if the server snapshot
-    // happens to interleave loops. The cursor points at the next slot to consider.
-    this.primaryLoops = this._groupByLoop(this.schedule.primary || []);
-    
-    this.loopIdx = 0;
-    this.assetIdx = 0;
-    this.fallbackCursor = prevFallbackCursor;
-    this.lastAssetId = prevLastAssetId;
-    this.lastPickedPrimaryId = prevPrimaryId;
+    // Group primary schedule into loops
+    this.primaryLoops = this._groupLoops(this.schedule.primary || [], false);
 
-    if (prevPrimaryId) {
-      for (let l = 0; l < this.primaryLoops.length; l++) {
-        const loop = this.primaryLoops[l];
-        let found = false;
-        for (let a = 0; a < loop.assetIds.length; a++) {
-          if (loop.assetIds[a] === prevPrimaryId) {
-            const nextAsset = a + 1;
-            if (nextAsset >= loop.assetIds.length) {
-              this.loopIdx = (l + 1) % this.primaryLoops.length;
-              this.assetIdx = 0;
-            } else {
-              this.loopIdx = l;
-              this.assetIdx = nextAsset;
-            }
-            found = true;
-            break;
-          }
+    // Group fallback schedule into loops and partition into campaign-specific vs global
+    let fallbackSlots = [];
+    if (Array.isArray(this.schedule.fallback) && this.schedule.fallback.length > 0) {
+      fallbackSlots = this.schedule.fallback;
+    } else {
+      fallbackSlots = [
+        ...(Array.isArray(this.schedule.campaign_fallback) ? this.schedule.campaign_fallback : []),
+        ...(Array.isArray(this.schedule.global_fallback) ? this.schedule.global_fallback : []),
+      ];
+    }
+
+    this.allFallbackLoops = this._groupLoops(fallbackSlots, true);
+    this.campaignFallbackLoops = new Map();
+    this.globalFallbackLoops = [];
+
+    for (const fbLoop of this.allFallbackLoops) {
+      if (fbLoop.campaignId) {
+        if (!this.campaignFallbackLoops.has(fbLoop.campaignId)) {
+          this.campaignFallbackLoops.set(fbLoop.campaignId, []);
         }
-        if (found) break;
+        this.campaignFallbackLoops.get(fbLoop.campaignId).push(fbLoop);
+      } else {
+        this.globalFallbackLoops.push(fbLoop);
       }
     }
 
-    // Override queue is intentionally NOT reset on reseed: an in-flight override
-    // must survive a reconciling /sync snapshot arriving between when the server
-    // injected it and when the player drains it.
-    this.overrideQueue = this.overrideQueue || [];
+    this.loopIdx = 0;
+    this.assetIdx = 0;
+    this.activeLoopPassList = null;
+    this.activeLoopId = null;
+
+    this.campaignFallbackCursors = this.campaignFallbackCursors || new Map();
+    this.globalFallbackCursor = prevFallbackCursor;
+    this.lastAssetId = prevLastAssetId;
+    this.lastPickedPrimaryId = prevPrimaryId;
 
     // Working counters derived from the snapshot, then advanced by unsynced plays.
     this.work = { assets: {}, loops: {} };
@@ -105,22 +107,138 @@ export class Scheduler {
     this._asOf = this.quota.as_of ? Date.parse(this.quota.as_of) : Date.now();
 
     for (const ev of pendingEvents) this._apply(ev, false);
+
+    // If previous primary play is known, restore cursor position
+    if (prevPrimaryId && this.primaryLoops.length > 0) {
+      for (let l = 0; l < this.primaryLoops.length; l++) {
+        const loop = this.primaryLoops[l];
+        const passList = this._buildPassList(loop);
+        const foundPos = passList.indexOf(prevPrimaryId);
+        if (foundPos !== -1) {
+          const nextAsset = foundPos + 1;
+          if (nextAsset >= passList.length) {
+            this.loopIdx = (l + 1) % this.primaryLoops.length;
+            this.assetIdx = 0;
+          } else {
+            this.loopIdx = l;
+            this.assetIdx = nextAsset;
+            this.activeLoopPassList = passList;
+            this.activeLoopId = loop.loopId;
+          }
+          break;
+        }
+      }
+    }
+
+    // Override queue is intentionally NOT reset on reseed: an in-flight override
+    // must survive a reconciling /sync snapshot arriving between when the server
+    // injected it and when the player drains it.
+    this.overrideQueue = this.overrideQueue || [];
   }
 
-  // Build ordered loops [{ loopId, assetIds: [...] }] from the flat primary list,
-  // keeping loops in first-seen order and assets in their scheduled order.
-  _groupByLoop(primary) {
+  get fallbackCursor() {
+    return this.globalFallbackCursor;
+  }
+
+  set fallbackCursor(val) {
+    this.globalFallbackCursor = val;
+  }
+
+  // Build ordered loop descriptors from a list of slots, preserving order.
+  _groupLoops(items, isFallbackDefault = false) {
     const order = [];
     const byLoop = new Map();
-    for (const slot of primary) {
+
+    for (const slot of items) {
       const lid = slot.loop_id ?? "__none__";
       if (!byLoop.has(lid)) {
-        byLoop.set(lid, []);
+        const loopMeta = this.schedule.loops?.[lid] || this.quota.loops?.[lid] || {};
+        const campaignId = loopMeta.campaign_id ?? slot.campaign_id ?? null;
+        const isBundle = !!loopMeta.is_bundle;
+        const isFallback = loopMeta.is_fallback !== undefined ? !!loopMeta.is_fallback : isFallbackDefault;
+
+        byLoop.set(lid, {
+          loopId: lid,
+          campaignId,
+          isBundle,
+          isFallback,
+          assets: [],
+        });
         order.push(lid);
       }
-      byLoop.get(lid).push(slot.asset_id);
+
+      const loopObj = byLoop.get(lid);
+      const assetDetail = this.assetsById.get(slot.asset_id);
+      const orderIndex = slot.order_index !== undefined
+        ? slot.order_index
+        : (assetDetail?.order_index !== undefined ? assetDetail.order_index : null);
+      const campaignId = slot.campaign_id ?? loopObj.campaignId ?? assetDetail?.campaign_id ?? null;
+
+      loopObj.assets.push({
+        asset_id: slot.asset_id,
+        order_index: orderIndex,
+        campaign_id: campaignId,
+      });
     }
-    return order.map((lid) => ({ loopId: lid, assetIds: byLoop.get(lid) }));
+
+    return order.map((lid) => byLoop.get(lid));
+  }
+
+  // Build the pass list for a loop:
+  // 1. Explicit assets (order_index != null), sorted by order_index ASC.
+  // 2. Unordered assets (order_index == null), sorted by lastPlayedAt ASC (least recently played).
+  _buildPassList(loop) {
+    const assets = loop.assets || [];
+    const seen = new Set();
+    const uniqueAssets = [];
+    for (let i = 0; i < assets.length; i++) {
+      const a = assets[i];
+      if (!seen.has(a.asset_id)) {
+        seen.add(a.asset_id);
+        uniqueAssets.push({ ...a, _origIndex: i });
+      }
+    }
+
+    const explicit = uniqueAssets
+      .filter((a) => a.order_index !== null && a.order_index !== undefined)
+      .sort((a, b) => {
+        const diff = Number(a.order_index) - Number(b.order_index);
+        if (diff !== 0) return diff;
+        return a._origIndex - b._origIndex;
+      });
+
+    const unordered = uniqueAssets
+      .filter((a) => a.order_index === null || a.order_index === undefined)
+      .sort((a, b) => {
+        const tA = this.work.assets[a.asset_id]?.lastPlayedAt ?? 0;
+        const tB = this.work.assets[b.asset_id]?.lastPlayedAt ?? 0;
+        if (tA !== tB) {
+          return tA - tB;
+        }
+        return a._origIndex - b._origIndex;
+      });
+
+    return [...explicit, ...unordered].map((a) => a.asset_id);
+  }
+
+  _getPassList(loop) {
+    if (this.activeLoopId === loop.loopId && this.activeLoopPassList) {
+      return this.activeLoopPassList;
+    }
+    const passList = this._buildPassList(loop);
+    this.activeLoopPassList = passList;
+    this.activeLoopId = loop.loopId;
+    return passList;
+  }
+
+  _findLoopIdForAsset(assetId) {
+    for (const loop of this.primaryLoops) {
+      if (loop.assets.some((a) => a.asset_id === assetId)) return loop.loopId;
+    }
+    for (const loop of this.allFallbackLoops) {
+      if (loop.assets.some((a) => a.asset_id === assetId)) return loop.loopId;
+    }
+    return null;
   }
 
   footprint(assetId) {
@@ -138,15 +256,17 @@ export class Scheduler {
     return base + local;
   }
 
-  _withinCampaign(detail, now) {
+  _withinCampaign(detail, q, now) {
     const today = ymd(now);
-    if (detail.campaign_start_date && today < detail.campaign_start_date) return false;
-    if (detail.campaign_end_date && today > detail.campaign_end_date) return false;
+    const startDate = detail?.campaign_start_date ?? q?.campaign_start_date;
+    const endDate = detail?.campaign_end_date ?? q?.campaign_end_date;
+    if (startDate && today < startDate) return false;
+    if (endDate && today > endDate) return false;
     return true;
   }
 
-  _withinPlaybackWindow(detail, now) {
-    const slots = detail.playback_times;
+  _withinPlaybackWindow(detail, q, now) {
+    const slots = detail?.playback_times ?? q?.playback_times;
     if (!slots || slots.length === 0) return true;
     const cur = now.getHours() * 60 + now.getMinutes();
     return slots.some((slot) => {
@@ -164,8 +284,8 @@ export class Scheduler {
     const w = this.work.assets[assetId] || { spotsRemaining: Infinity, playsToday: 0 };
 
     if (w.spotsRemaining <= 0) return 'no_spots_remaining';
-    if (!this._withinCampaign(detail, now)) return 'outside_flight_dates';
-    if (!this._withinPlaybackWindow(detail, now)) return 'outside_playback_window';
+    if (!this._withinCampaign(detail, q, now)) return 'outside_flight_dates';
+    if (!this._withinPlaybackWindow(detail, q, now)) return 'outside_playback_window';
 
     if (q.max_plays_per_hour != null &&
         this._playsLastHour(assetId, now.getTime()) >= q.max_plays_per_hour) {
@@ -184,7 +304,7 @@ export class Scheduler {
       return 'daily_exceeded';
     }
     // Loop daily spot cap (charged by footprint).
-    const loopId = detail.loop_id;
+    const loopId = detail.loop_id || this._findLoopIdForAsset(assetId);
     const loopQ = loopId != null ? this.quota.loops?.[loopId] : null;
     if (loopQ && loopQ.max_daily_spots != null) {
       const spent = this.work.loops[loopId]?.spotsToday ?? 0;
@@ -207,10 +327,10 @@ export class Scheduler {
     const detail = this.assetsById.get(assetId);
     return {
       asset_id: assetId,
-      asset_name: detail?.name,
-      file_type: detail?.file_type,
-      duration_secs: detail?.duration_secs,
-      loop_id: detail?.loop_id ?? null,
+      asset_name: detail?.name ?? detail?.asset_name ?? assetId,
+      file_type: detail?.file_type ?? 'video',
+      duration_secs: detail?.duration_secs ?? 15,
+      loop_id: detail?.loop_id ?? this._findLoopIdForAsset(assetId) ?? null,
       download_url: detail?.download_url ?? null,
       is_override: !!isOverride,
     };
@@ -238,68 +358,213 @@ export class Scheduler {
    * null when nothing qualifies (genuine empty state).
    */
   pickNext(now = new Date()) {
-    // Overrides: find the first override that does not conflict with history.
-    // Conflicting overrides are deferred (held in queue).
+    // 1. Overrides: find the first override that does not conflict with history.
+    // Conflicting overrides are deferred (held in queue). Non-conflict constraints are bypassed.
     for (let i = 0; i < this.overrideQueue.length; i++) {
       const o = this.overrideQueue[i];
       const reason = this._eligible(o.asset_id, now);
       if (reason === 'valid' || reason !== 'conflict') {
-        // If it's valid, or if it failed for a reason other than conflict (we bypass
-        // non-conflict constraints for overrides), we can play it.
-        // Wait, issue says "defer overrides that conflict with history". 
-        // Only CONFLICT defers it. Other constraints are bypassed.
         this.overrideQueue.splice(i, 1);
         return o;
       }
     }
 
+    let selectedAssetId = null;
+
+    // 2. Primary loops
     const loops = this.primaryLoops;
     if (loops.length > 0) {
-      // Walk each loop at most once per call, starting from the current cursor.
-      // Within the current loop we resume at assetIdx; later loops start at 0. The
-      // first eligible asset wins, and the cursor advances to just after it — so a
-      // loop whose tail is capped/not-due does not stall the rotation.
-      for (let l = 0; l < loops.length; l++) {
-        const loopIdx = (this.loopIdx + l) % loops.length;
-        const loop = loops[loopIdx];
-        const start = l === 0 ? this.assetIdx : 0;
-        for (let a = start; a < loop.assetIds.length; a++) {
-          const assetId = loop.assetIds[a];
-          const reason = this._eligible(assetId, now);
-          if (reason === 'valid') {
-            const nextAsset = a + 1;
-            if (nextAsset >= loop.assetIds.length) {
-              // Finished this loop's pass — advance to the next loop.
-              this.loopIdx = (loopIdx + 1) % loops.length;
-              this.assetIdx = 0;
+      let loopsChecked = 0;
+
+      while (loopsChecked < loops.length && !selectedAssetId) {
+        const loop = loops[this.loopIdx];
+        const passList = this._getPassList(loop);
+
+        if (loop.isBundle) {
+          if (passList.length > 0) {
+            if (this.assetIdx === 0) {
+              // Atomic bundle: first asset governs whole bundle for this pass
+              const firstAssetId = passList[0];
+              const firstReason = this._eligible(firstAssetId, now);
+
+              if (firstReason !== 'valid') {
+                if (this.onReject) this.onReject(firstAssetId, firstReason);
+                // Skip entire bundle loop
+                this.loopIdx = (this.loopIdx + 1) % loops.length;
+                this.assetIdx = 0;
+                this.activeLoopPassList = null;
+                this.activeLoopId = null;
+              } else {
+                selectedAssetId = firstAssetId;
+                this.lastPickedPrimaryId = firstAssetId;
+                if (passList.length === 1) {
+                  this.loopIdx = (this.loopIdx + 1) % loops.length;
+                  this.assetIdx = 0;
+                  this.activeLoopPassList = null;
+                  this.activeLoopId = null;
+                } else {
+                  this.assetIdx = 1;
+                  this.activeLoopPassList = passList;
+                  this.activeLoopId = loop.loopId;
+                }
+              }
             } else {
-              this.loopIdx = loopIdx;
-              this.assetIdx = nextAsset;
+              // Continuing in the middle of a bundle loop
+              const startA = this.assetIdx < passList.length ? this.assetIdx : 0;
+              const candidateId = passList[startA];
+              const candidateReason = this._eligible(candidateId, now);
+
+              if (candidateReason === 'valid') {
+                selectedAssetId = candidateId;
+                this.lastPickedPrimaryId = candidateId;
+                if (startA + 1 >= passList.length) {
+                  this.loopIdx = (this.loopIdx + 1) % loops.length;
+                  this.assetIdx = 0;
+                  this.activeLoopPassList = null;
+                  this.activeLoopId = null;
+                } else {
+                  this.assetIdx = startA + 1;
+                }
+              } else {
+                if (this.onReject) this.onReject(candidateId, candidateReason);
+                // Bundle candidate failed: skip the rest of the bundle
+                this.loopIdx = (this.loopIdx + 1) % loops.length;
+                this.assetIdx = 0;
+                this.activeLoopPassList = null;
+                this.activeLoopId = null;
+              }
             }
-            this.lastPickedPrimaryId = assetId;
-            return this._build(assetId, false);
           } else {
+            this.loopIdx = (this.loopIdx + 1) % loops.length;
+            this.assetIdx = 0;
+            this.activeLoopPassList = null;
+            this.activeLoopId = null;
+          }
+        } else {
+          // Standard loop
+          const startA = this.assetIdx < passList.length ? this.assetIdx : 0;
+          let foundInLoop = false;
+
+          for (let a = startA; a < passList.length; a++) {
+            const candidateId = passList[a];
+            const reason = this._eligible(candidateId, now);
+
+            if (reason === 'valid') {
+              selectedAssetId = candidateId;
+              this.lastPickedPrimaryId = candidateId;
+              foundInLoop = true;
+              if (a + 1 >= passList.length) {
+                this.loopIdx = (this.loopIdx + 1) % loops.length;
+                this.assetIdx = 0;
+                this.activeLoopPassList = null;
+                this.activeLoopId = null;
+              } else {
+                this.assetIdx = a + 1;
+                this.activeLoopPassList = passList;
+                this.activeLoopId = loop.loopId;
+              }
+              break;
+            } else {
+              if (this.onReject) this.onReject(candidateId, reason);
+            }
+          }
+
+          if (!foundInLoop) {
+            this.loopIdx = (this.loopIdx + 1) % loops.length;
+            this.assetIdx = 0;
+            this.activeLoopPassList = null;
+            this.activeLoopId = null;
+          }
+        }
+
+        // If primary loop yielded no eligible assets, check campaign-specific fallbacks
+        if (!selectedAssetId && loop.campaignId) {
+          const cFallbacks = this.campaignFallbackLoops.get(loop.campaignId);
+          if (cFallbacks && cFallbacks.length > 0) {
+            let cCursor = this.campaignFallbackCursors.get(loop.campaignId) || 0;
+            let fbAttempts = 0;
+
+            while (fbAttempts < cFallbacks.length && !selectedAssetId) {
+              const fbLoop = cFallbacks[cCursor % cFallbacks.length];
+              const fbPassList = this._buildPassList(fbLoop);
+
+              for (const candidateId of fbPassList) {
+                const fbReason = this._eligible(candidateId, now);
+                if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window')) {
+                  selectedAssetId = candidateId;
+                  this.campaignFallbackCursors.set(loop.campaignId, (cCursor + 1) % cFallbacks.length);
+                  break;
+                } else {
+                  if (this.onReject) this.onReject(candidateId, fbReason);
+                }
+              }
+
+              cCursor++;
+              fbAttempts++;
+            }
+          }
+        }
+
+        loopsChecked++;
+      }
+    }
+
+    if (selectedAssetId) {
+      return this._build(selectedAssetId, false);
+    }
+
+    // 3. Global fallback loops
+    const fbCandidates = (this.globalFallbackLoops && this.globalFallbackLoops.length > 0)
+      ? this.globalFallbackLoops
+      : this.allFallbackLoops;
+
+    if (fbCandidates && fbCandidates.length > 0) {
+      let fbAttempts = 0;
+      while (fbAttempts < fbCandidates.length && !selectedAssetId) {
+        const fbLoop = fbCandidates[this.globalFallbackCursor % fbCandidates.length];
+        const fbPassList = this._buildPassList(fbLoop);
+
+        for (const candidateId of fbPassList) {
+          const fbReason = this._eligible(candidateId, now);
+          if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window')) {
+            selectedAssetId = candidateId;
+            this.globalFallbackCursor = (this.globalFallbackCursor + 1) % fbCandidates.length;
+            break;
+          } else {
+            if (this.onReject) this.onReject(candidateId, fbReason);
+          }
+        }
+
+        fbAttempts++;
+        if (!selectedAssetId) {
+          this.globalFallbackCursor = (this.globalFallbackCursor + 1) % fbCandidates.length;
+        }
+      }
+    }
+
+    // 4. Flat fallback list fallback (emergency / backwards compat)
+    if (!selectedAssetId && this.schedule.fallback && this.schedule.fallback.length > 0) {
+      const fallback = this.schedule.fallback;
+      for (let i = 0; i < fallback.length; i++) {
+        const idx = (this.globalFallbackCursor + i) % fallback.length;
+        const assetId = fallback[idx].asset_id;
+        if (this.assetsById.has(assetId)) {
+          const reason = this._eligible(assetId, now);
+          if (reason === 'valid' || (reason !== 'conflict' && reason !== 'missing_asset' && reason !== 'outside_flight_dates' && reason !== 'outside_playback_window')) {
+            this.globalFallbackCursor = (idx + 1) % fallback.length;
+            selectedAssetId = assetId;
+            break;
+          } else if (reason === 'conflict') {
             if (this.onReject) this.onReject(assetId, reason);
           }
         }
       }
     }
-    // No primary qualifies (pacing gap or all capped) — fall back to filler.
-    const fallback = this.schedule.fallback || [];
-    for (let i = 0; i < fallback.length; i++) {
-      const idx = (this.fallbackCursor + i) % fallback.length;
-      const assetId = fallback[idx].asset_id;
-      if (this.assetsById.has(assetId)) {
-        const reason = this._eligible(assetId, now);
-        if (reason === 'valid' || (reason !== 'conflict' && reason !== 'missing_asset')) {
-          // Fallbacks bypass pacing/caps, but MUST pass conflict check.
-          this.fallbackCursor = (idx + 1) % fallback.length;
-          return this._build(assetId, false);
-        } else if (reason === 'conflict') {
-          if (this.onReject) this.onReject(assetId, reason);
-        }
-      }
+
+    if (selectedAssetId) {
+      return this._build(selectedAssetId, false);
     }
+
     return null;
   }
 
@@ -323,14 +588,20 @@ export class Scheduler {
 
   // Advance working counters for one play event (used by recordPlay and replay).
   _apply(event, isLive) {
-    const w = this.work.assets[event.asset_id];
-    if (w) {
-      if (w.spotsRemaining !== Infinity) w.spotsRemaining -= 1;
-      w.playsToday += 1;
-      const t = Date.parse(event.played_at) || Date.now();
-      w.recent.push(t);
-      w.lastPlayedAt = w.lastPlayedAt == null ? t : Math.max(w.lastPlayedAt, t);
-    }
+    const w = (this.work.assets[event.asset_id] ||= {
+      spotsRemaining: Infinity,
+      playsToday: 0,
+      recent: [],
+      baseHour: 0,
+      lastPlayedAt: null,
+    });
+
+    if (w.spotsRemaining !== Infinity) w.spotsRemaining -= 1;
+    w.playsToday += 1;
+    const t = Date.parse(event.played_at) || Date.now();
+    w.recent.push(t);
+    w.lastPlayedAt = w.lastPlayedAt == null ? t : Math.max(w.lastPlayedAt, t);
+
     if (event.loop_id != null) {
       const l = (this.work.loops[event.loop_id] ||= { spotsToday: 0 });
       l.spotsToday += event.footprint ?? 1;

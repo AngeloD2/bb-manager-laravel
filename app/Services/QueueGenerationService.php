@@ -217,58 +217,55 @@ class QueueGenerationService
         array $projLoopDaily = [],
         int $secondsPerSpot = 15
     ): array {
-        // Loops play in the operator-defined order (billboard.loop_orders); loops not
-        // listed there fall to the end by creation order. Concatenating each loop's
-        // assets (in order_index) into one flat list and walking it sequentially
-        // gives "finish a loop before advancing to the next" by construction.
         $loopOrder = collect($billboard->loop_orders ?? [])->flip(); // loop_id => position
-        $byLoopOrder = fn (Collection $loops) => $loops->sortBy([
-            fn (MediaLoop $loop) => $loopOrder[$loop->id] ?? PHP_INT_MAX,
-            fn (MediaLoop $loop) => $loop->created_at,
-        ])->values();
+        $byLoopOrder = fn (Collection $loops) => $loops->sort(function ($a, $b) use ($loopOrder) {
+            $posA = $loopOrder[$a->id] ?? PHP_INT_MAX;
+            $posB = $loopOrder[$b->id] ?? PHP_INT_MAX;
+            if ($posA !== $posB) {
+                return $posA <=> $posB;
+            }
+            $cA = $a->created_at?->timestamp ?? 0;
+            $cB = $b->created_at?->timestamp ?? 0;
+            return $cA <=> $cB;
+        })->values();
 
         $primaryLoops = $byLoopOrder(MediaLoop::where('is_fallback', false)
             ->with(['assets' => function($q) {
                 $q->where('is_synced', true)
-                  ->orderBy('order_index', 'asc')
                   ->with('conflicts');
-            }])
-            ->get());
+            }, 'campaign'])
+            ->get())
+            ->filter(function (MediaLoop $loop) use ($billboard) {
+                return $loop->assets->contains(fn ($asset) => $this->isAssignedToBillboard($asset, $billboard));
+            })->values();
 
-        $masterPrimaryAssets = new Collection();
-        foreach ($primaryLoops as $loop) {
-            foreach ($loop->assets as $asset) {
-                if ($this->isAssignedToBillboard($asset, $billboard)) {
-                    $masterPrimaryAssets->push($asset);
-                }
-            }
-        }
-
-        $fallbackLoops = $byLoopOrder(MediaLoop::where('is_fallback', true)
+        $allFallbackLoops = $byLoopOrder(MediaLoop::where('is_fallback', true)
             ->with(['assets' => function($q) {
                 $q->where('is_synced', true)
-                  ->orderBy('order_index', 'asc')
                   ->with('conflicts');
-            }])
-            ->get());
+            }, 'campaign'])
+            ->get())
+            ->filter(function (MediaLoop $loop) use ($billboard) {
+                return $loop->assets->contains(fn ($asset) => $this->isAssignedToBillboard($asset, $billboard));
+            })->values();
 
-        $masterFallbackAssets = new Collection();
-        foreach ($fallbackLoops as $loop) {
-            foreach ($loop->assets as $asset) {
-                if ($this->isAssignedToBillboard($asset, $billboard)) {
-                    $masterFallbackAssets->push($asset);
-                }
-            }
-        }
+        $campaignFallbackLoops = $allFallbackLoops
+            ->filter(fn (MediaLoop $l) => !empty($l->campaign_id))
+            ->groupBy('campaign_id');
+
+        $globalFallbackLoops = $allFallbackLoops
+            ->filter(fn (MediaLoop $l) => empty($l->campaign_id))
+            ->values();
 
         // Pacing state: seed each asset's last real play, then advance a virtual
         // clock by each scheduled clip's duration so later items in this batch are
-        // spaced out too. Generation usually runs one item at a time as the queue
-        // drains, so in steady state the seed already reflects real playback.
-        $lastPlayedMs = \App\Models\PlaybackLog::whereIn(
-                'asset_id',
-                $masterPrimaryAssets->pluck('id')->merge($masterFallbackAssets->pluck('id'))->unique()->all()
-            )
+        // spaced out too.
+        $allAssetIds = $primaryLoops->flatMap->assets->pluck('id')
+            ->merge($allFallbackLoops->flatMap->assets->pluck('id'))
+            ->unique()
+            ->all();
+
+        $lastPlayedMs = empty($allAssetIds) ? [] : \App\Models\PlaybackLog::whereIn('asset_id', $allAssetIds)
             ->selectRaw('asset_id, MAX(played_at) as last_played')
             ->groupBy('asset_id')
             ->pluck('last_played', 'asset_id')
@@ -276,63 +273,246 @@ class QueueGenerationService
             ->all();
         $virtualMs = now()->getTimestampMs();
 
-        $generated = [];
-        
-        $currentIndex = -1;
+        $buildPassList = function (MediaLoop $loop) use ($billboard, &$lastPlayedMs) {
+            $assets = $loop->assets->filter(fn ($a) => $this->isAssignedToBillboard($a, $billboard));
+
+            $explicit = $assets->filter(fn ($a) => $a->order_index !== null)
+                ->sort(function ($a, $b) {
+                    if ($a->order_index !== $b->order_index) {
+                        return $a->order_index <=> $b->order_index;
+                    }
+                    $cA = $a->created_at?->timestamp ?? 0;
+                    $cB = $b->created_at?->timestamp ?? 0;
+                    if ($cA !== $cB) {
+                        return $cA <=> $cB;
+                    }
+                    return strcmp($a->id, $b->id);
+                })
+                ->values();
+
+            $unordered = $assets->filter(fn ($a) => $a->order_index === null)
+                ->sort(function ($a, $b) use (&$lastPlayedMs) {
+                    $tA = $lastPlayedMs[$a->id] ?? 0;
+                    $tB = $lastPlayedMs[$b->id] ?? 0;
+                    if ($tA !== $tB) {
+                        return $tA <=> $tB;
+                    }
+                    $cA = $a->created_at?->timestamp ?? 0;
+                    $cB = $b->created_at?->timestamp ?? 0;
+                    if ($cA !== $cB) {
+                        return $cA <=> $cB;
+                    }
+                    return strcmp($a->id, $b->id);
+                })
+                ->values();
+
+            return $explicit->concat($unordered)->values();
+        };
+
+        $loopIdx = 0;
+        $assetIdx = 0;
+        $globalFallbackLoopIndex = 0;
+        $campaignFallbackCursors = []; // campaign_id => cursor index
+        $activeLoopPassList = null;
+        $activeLoopId = null;
+
         $previousAssetId = !empty($history) ? end($history) : null;
-        if ($previousAssetId) {
-            $currentIndex = $masterPrimaryAssets->search(fn($a) => $a->id === $previousAssetId);
-            if ($currentIndex === false) {
-                $currentIndex = -1;
+        if ($previousAssetId && $primaryLoops->isNotEmpty()) {
+            foreach ($primaryLoops as $lIndex => $l) {
+                $passList = $buildPassList($l);
+                $foundPos = $passList->search(fn ($a) => $a->id === $previousAssetId);
+                if ($foundPos !== false) {
+                    if ($foundPos + 1 >= $passList->count()) {
+                        $loopIdx = ($lIndex + 1) % $primaryLoops->count();
+                        $assetIdx = 0;
+                    } else {
+                        $loopIdx = $lIndex;
+                        $assetIdx = $foundPos + 1;
+                        $activeLoopPassList = $passList;
+                        $activeLoopId = $l->id;
+                    }
+                    break;
+                }
             }
         }
-        
-        $fallbackIndex = -1;
-        if ($previousAssetId && $currentIndex === -1) {
-            $fallbackIndex = $masterFallbackAssets->search(fn($a) => $a->id === $previousAssetId);
-            if ($fallbackIndex === false) {
-                $fallbackIndex = -1;
+
+        if ($previousAssetId && $globalFallbackLoops->isNotEmpty()) {
+            foreach ($globalFallbackLoops as $fbIndex => $fbLoop) {
+                $fbPassList = $buildPassList($fbLoop);
+                $foundPos = $fbPassList->search(fn ($a) => $a->id === $previousAssetId);
+                if ($foundPos !== false) {
+                    $globalFallbackLoopIndex = ($fbIndex + 1) % $globalFallbackLoops->count();
+                    break;
+                }
             }
         }
+
+        $generated = [];
 
         for ($i = 0; $i < $count; $i++) {
             $selected = null;
-            $attempts = 0;
-            
-            if ($masterPrimaryAssets->isNotEmpty()) {
-                while ($attempts < $masterPrimaryAssets->count()) {
-                    $currentIndex = ($currentIndex + 1) % $masterPrimaryAssets->count();
-                    $candidate = $masterPrimaryAssets[$currentIndex];
-                    $validationResult = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
-                    if ($validationResult === ConstraintValidationService::VALID
-                        && $this->isDue($candidate, $virtualMs, $lastPlayedMs)) {
-                        $selected = $candidate;
-                        break;
-                    } elseif ($validationResult !== ConstraintValidationService::VALID) {
-                        $this->tallyRejection($billboard->id, $candidate->id, $validationResult);
+
+            if ($primaryLoops->isNotEmpty()) {
+                $loopsChecked = 0;
+                while ($loopsChecked < $primaryLoops->count() && !$selected) {
+                    $loop = $primaryLoops[$loopIdx];
+
+                    // Use cached pass list if we are in the middle of this loop, else build a fresh one
+                    if ($activeLoopId === $loop->id && $activeLoopPassList !== null) {
+                        $passList = $activeLoopPassList;
+                    } else {
+                        $passList = $buildPassList($loop);
+                        $activeLoopPassList = $passList;
+                        $activeLoopId = $loop->id;
                     }
-                    $attempts++;
+
+                    if ($loop->is_bundle) {
+                        if ($passList->isNotEmpty()) {
+                            // Atomic bundle: first asset governs whole bundle for this pass
+                            $firstAsset = $passList->first();
+                            $firstVal = $this->isEligibleProjected($firstAsset, $history, $projHourly, $projDaily, $projLoopDaily);
+                            $firstDue = $this->isDue($firstAsset, $virtualMs, $lastPlayedMs);
+
+                            if ($firstVal !== ConstraintValidationService::VALID || !$firstDue) {
+                                if ($firstVal !== ConstraintValidationService::VALID) {
+                                    $this->tallyRejection($billboard->id, $firstAsset->id, $firstVal);
+                                }
+                                // Skip entire bundle loop
+                                $loopIdx = ($loopIdx + 1) % $primaryLoops->count();
+                                $assetIdx = 0;
+                                $activeLoopPassList = null;
+                                $activeLoopId = null;
+                            } else {
+                                $startA = $assetIdx < $passList->count() ? $assetIdx : 0;
+                                $candidate = $passList[$startA];
+                                $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                                $candidateDue = $this->isDue($candidate, $virtualMs, $lastPlayedMs);
+
+                                if ($candidateVal === ConstraintValidationService::VALID && $candidateDue) {
+                                    $selected = $candidate;
+                                    if ($startA + 1 >= $passList->count()) {
+                                        $loopIdx = ($loopIdx + 1) % $primaryLoops->count();
+                                        $assetIdx = 0;
+                                        $activeLoopPassList = null;
+                                        $activeLoopId = null;
+                                    } else {
+                                        $assetIdx = $startA + 1;
+                                    }
+                                } else {
+                                    if ($candidateVal !== ConstraintValidationService::VALID) {
+                                        $this->tallyRejection($billboard->id, $candidate->id, $candidateVal);
+                                    }
+                                    $loopIdx = ($loopIdx + 1) % $primaryLoops->count();
+                                    $assetIdx = 0;
+                                    $activeLoopPassList = null;
+                                    $activeLoopId = null;
+                                }
+                            }
+                        } else {
+                            $loopIdx = ($loopIdx + 1) % $primaryLoops->count();
+                            $assetIdx = 0;
+                            $activeLoopPassList = null;
+                            $activeLoopId = null;
+                        }
+                    } else {
+                        // Standard loop
+                        $startA = $assetIdx < $passList->count() ? $assetIdx : 0;
+                        $foundInLoop = false;
+
+                        for ($a = $startA; $a < $passList->count(); $a++) {
+                            $candidate = $passList[$a];
+                            $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                            $candidateDue = $this->isDue($candidate, $virtualMs, $lastPlayedMs);
+
+                            if ($candidateVal === ConstraintValidationService::VALID && $candidateDue) {
+                                $selected = $candidate;
+                                $foundInLoop = true;
+                                if ($a + 1 >= $passList->count()) {
+                                    $loopIdx = ($loopIdx + 1) % $primaryLoops->count();
+                                    $assetIdx = 0;
+                                    $activeLoopPassList = null;
+                                    $activeLoopId = null;
+                                } else {
+                                    $assetIdx = $a + 1;
+                                }
+                                break;
+                            } else {
+                                if ($candidateVal !== ConstraintValidationService::VALID) {
+                                    $this->tallyRejection($billboard->id, $candidate->id, $candidateVal);
+                                }
+                            }
+                        }
+
+                        if (!$foundInLoop) {
+                            $loopIdx = ($loopIdx + 1) % $primaryLoops->count();
+                            $assetIdx = 0;
+                            $activeLoopPassList = null;
+                            $activeLoopId = null;
+                        }
+                    }
+
+                    // If primary loop yielded no eligible assets, check campaign-specific fallbacks
+                    if (!$selected && !empty($loop->campaign_id)) {
+                        $campaignId = $loop->campaign_id;
+                        $cFallbacks = $campaignFallbackLoops->get($campaignId);
+
+                        if ($cFallbacks && $cFallbacks->isNotEmpty()) {
+                            $cCursor = $campaignFallbackCursors[$campaignId] ?? 0;
+                            $fbAttempts = 0;
+
+                            while ($fbAttempts < $cFallbacks->count() && !$selected) {
+                                $fbLoop = $cFallbacks[$cCursor % $cFallbacks->count()];
+                                $fbPassList = $buildPassList($fbLoop);
+
+                                foreach ($fbPassList as $candidate) {
+                                    $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                                    if ($fbVal === ConstraintValidationService::VALID) {
+                                        $selected = $candidate;
+                                        $campaignFallbackCursors[$campaignId] = ($cCursor + 1) % $cFallbacks->count();
+                                        break;
+                                    } else {
+                                        $this->tallyRejection($billboard->id, $candidate->id, $fbVal);
+                                    }
+                                }
+
+                                $cCursor++;
+                                $fbAttempts++;
+                            }
+                        }
+                    }
+
+                    $loopsChecked++;
                 }
             }
 
-            // Pacing gap: no primary asset is due right now — fill with the fallback
-            // loop so the board is never blank.
-            if (!$selected && $masterFallbackAssets->isNotEmpty()) {
-                $attempts = 0;
-                while ($attempts < $masterFallbackAssets->count()) {
-                    $fallbackIndex = ($fallbackIndex + 1) % $masterFallbackAssets->count();
-                    $candidate = $masterFallbackAssets[$fallbackIndex];
-                    $validationResult = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
-                    if ($validationResult === ConstraintValidationService::VALID) {
-                        $selected = $candidate;
-                        break;
-                    } elseif ($validationResult !== ConstraintValidationService::VALID) {
-                        $this->tallyRejection($billboard->id, $candidate->id, $validationResult);
+            // If no primary loop and no campaign fallback yielded an asset, try global fallback loops
+            if (!$selected && ($globalFallbackLoops->isNotEmpty() || $allFallbackLoops->isNotEmpty())) {
+                $fbCandidates = $globalFallbackLoops->isNotEmpty() ? $globalFallbackLoops : $allFallbackLoops;
+                $fbAttempts = 0;
+
+                while ($fbAttempts < $fbCandidates->count() && !$selected) {
+                    $fbLoop = $fbCandidates[$globalFallbackLoopIndex % $fbCandidates->count()];
+                    $fbPassList = $buildPassList($fbLoop);
+
+                    foreach ($fbPassList as $candidate) {
+                        $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                        if ($fbVal === ConstraintValidationService::VALID) {
+                            $selected = $candidate;
+                            $globalFallbackLoopIndex = ($globalFallbackLoopIndex + 1) % $fbCandidates->count();
+                            break;
+                        } else {
+                            $this->tallyRejection($billboard->id, $candidate->id, $fbVal);
+                        }
                     }
-                    $attempts++;
+
+                    $fbAttempts++;
+                    if (!$selected) {
+                        $globalFallbackLoopIndex = ($globalFallbackLoopIndex + 1) % $fbCandidates->count();
+                    }
                 }
             }
 
+            // Emergency safety net
             if (!$selected) {
                 $anyWithSpots = MediaAsset::where('play_spots_remaining', '>', 0)
                     ->get()
