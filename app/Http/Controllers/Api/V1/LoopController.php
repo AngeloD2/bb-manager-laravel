@@ -41,6 +41,8 @@ class LoopController extends Controller
             'campaign_id'      => ['nullable', 'uuid', 'exists:campaigns,id'],
             'is_fallback'      => ['boolean'],
             'is_global'        => ['boolean'],
+            'is_bundle'        => ['boolean'],
+            'order_index'      => ['nullable', 'integer', 'min:0'],
             'max_daily_spots' => ['nullable', 'integer', 'min:1', 'max:99999'],
             'assigned_billboards' => ['nullable', 'array'],
         ]);
@@ -59,6 +61,8 @@ class LoopController extends Controller
             'campaign_id'    => ['nullable', 'uuid', Rule::exists('campaigns', 'id')],
             'is_fallback'      => ['sometimes', 'boolean'],
             'is_global'        => ['sometimes', 'boolean'],
+            'is_bundle'        => ['sometimes', 'boolean'],
+            'order_index'      => ['nullable', 'integer', 'min:0'],
             'max_daily_spots' => ['nullable', 'integer', 'min:1', 'max:99999'],
             'assigned_billboards' => ['nullable', 'array'],
         ]);

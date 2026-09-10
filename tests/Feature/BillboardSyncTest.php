@@ -244,6 +244,98 @@ class BillboardSyncTest extends TestCase
     }
 
     /** @test */
+    public function sync_payload_includes_bundle_and_fallback_organization(): void
+    {
+        $this->actAsBillboard();
+
+        $campaign = \App\Models\Campaign::create(['name' => 'Acme Campaign']);
+
+        $bundleLoop = MediaLoop::create([
+            'name' => 'Bundle 1',
+            'campaign_id' => $campaign->id,
+            'is_fallback' => false,
+            'is_global' => true,
+            'is_bundle' => true,
+        ]);
+
+        $campaignFallbackLoop = MediaLoop::create([
+            'name' => 'Acme Fallback',
+            'campaign_id' => $campaign->id,
+            'is_fallback' => true,
+            'is_global' => true,
+            'is_bundle' => false,
+        ]);
+
+        $globalFallbackLoop = MediaLoop::create([
+            'name' => 'Global Fallback',
+            'campaign_id' => null,
+            'is_fallback' => true,
+            'is_global' => true,
+            'is_bundle' => false,
+        ]);
+
+        $asset1 = MediaAsset::create([
+            'name' => 'Part 1',
+            'file_path' => 'media/part1.mp4',
+            'file_type' => 'VIDEO',
+            'loop_id' => $bundleLoop->id,
+            'order_index' => null, // nullable test
+            'size_bytes' => 1000,
+            'duration_secs' => 10,
+            'is_synced' => true,
+            'play_spots_remaining' => 50,
+        ]);
+
+        $asset2 = MediaAsset::create([
+            'name' => 'Acme FB Asset',
+            'file_path' => 'media/acme_fb.mp4',
+            'file_type' => 'VIDEO',
+            'loop_id' => $campaignFallbackLoop->id,
+            'order_index' => 0,
+            'size_bytes' => 1000,
+            'duration_secs' => 10,
+            'is_synced' => true,
+            'play_spots_remaining' => 50,
+        ]);
+
+        $asset3 = MediaAsset::create([
+            'name' => 'Global FB Asset',
+            'file_path' => 'media/global_fb.mp4',
+            'file_type' => 'VIDEO',
+            'loop_id' => $globalFallbackLoop->id,
+            'order_index' => 0,
+            'size_bytes' => 1000,
+            'duration_secs' => 10,
+            'is_synced' => true,
+            'play_spots_remaining' => 50,
+        ]);
+
+        $res = $this->getJson('/api/v1/sync')
+            ->assertOk()
+            ->assertJsonStructure([
+                'data' => [
+                    'schedule' => ['primary', 'fallback', 'campaign_fallback', 'global_fallback', 'loops'],
+                    'quota'    => ['loops'],
+                ],
+            ]);
+
+        // Loop metadata
+        $res->assertJsonPath('data.schedule.loops.' . $bundleLoop->id . '.is_bundle', true);
+        $res->assertJsonPath('data.quota.loops.' . $bundleLoop->id . '.is_bundle', true);
+        $res->assertJsonPath('data.quota.loops.' . $bundleLoop->id . '.campaign_id', $campaign->id);
+
+        // Asset order_index can be null
+        $res->assertJsonPath('data.schedule.primary.0.asset_id', $asset1->id);
+        $res->assertJsonPath('data.schedule.primary.0.order_index', null);
+
+        // Fallbacks properly partitioned
+        $res->assertJsonPath('data.schedule.campaign_fallback.0.asset_id', $asset2->id);
+        $res->assertJsonPath('data.schedule.campaign_fallback.0.campaign_id', $campaign->id);
+        $res->assertJsonPath('data.schedule.global_fallback.0.asset_id', $asset3->id);
+        $res->assertJsonPath('data.schedule.global_fallback.0.campaign_id', null);
+    }
+
+    /** @test */
     public function ping_returns_ok_and_server_time(): void
     {
         $this->actAsBillboard();

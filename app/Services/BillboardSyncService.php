@@ -133,7 +133,7 @@ class BillboardSyncService
             'pending_overrides'=> $pendingOverrides,
             // Pre-baked ordering + counter snapshot so the billboard can sequence
             // and meter spots locally (and entirely offline) between syncs.
-            'schedule'         => $this->buildSchedule($billboard, $primaryAssets, $fallbackAssets),
+            'schedule'         => $this->buildSchedule($billboard, $primaryAssets, $fallbackAssets, $loops),
             'quota'            => $this->buildQuota($billboard, $primaryAssets, $fallbackAssets, $standaloneAssets, $loops),
             'synced_at'        => now()->toIso8601String(),
             'broadcasting'     => [
@@ -151,9 +151,9 @@ class BillboardSyncService
      * user-defined `loop_orders`, then by each asset's `order_index`. Fallbacks
      * follow their own order and are only reached when no primary qualifies.
      *
-     * @return array{primary: array<int, array>, fallback: array<int, array>}
+     * @return array{primary: array<int, array>, fallback: array<int, array>, campaign_fallback: array<int, array>, global_fallback: array<int, array>, loops: array<string, array>}
      */
-    private function buildSchedule(Billboard $billboard, Collection $primaryAssets, Collection $fallbackAssets): array
+    private function buildSchedule(Billboard $billboard, Collection $primaryAssets, Collection $fallbackAssets, ?Collection $loops = null): array
     {
         $loopOrder = collect($billboard->loop_orders ?? [])->flip(); // loop_id => position
 
@@ -165,14 +165,35 @@ class BillboardSyncService
             ->map(fn (MediaAsset $a) => [
                 'asset_id'    => $a->id,
                 'loop_id'     => $a->loop_id,
+                'campaign_id' => $a->loop?->campaign_id,
                 'order_index' => $a->order_index,
             ])
             ->values()
             ->all();
 
+        $campaignFallbackAssets = $fallbackAssets->filter(fn (MediaAsset $a) => !empty($a->loop?->campaign_id))->values();
+        $globalFallbackAssets = $fallbackAssets->filter(fn (MediaAsset $a) => empty($a->loop?->campaign_id))->values();
+
+        $loopMeta = [];
+        if ($loops) {
+            foreach ($loops as $loop) {
+                $loopMeta[$loop->id] = [
+                    'id'          => $loop->id,
+                    'name'        => $loop->name,
+                    'campaign_id' => $loop->campaign_id,
+                    'is_fallback' => (bool) $loop->is_fallback,
+                    'is_bundle'   => (bool) $loop->is_bundle,
+                    'order_index' => $loop->order_index,
+                ];
+            }
+        }
+
         return [
-            'primary'  => $sequence($primaryAssets),
-            'fallback' => $sequence($fallbackAssets),
+            'primary'           => $sequence($primaryAssets),
+            'campaign_fallback' => $sequence($campaignFallbackAssets),
+            'global_fallback'   => $sequence($globalFallbackAssets),
+            'fallback'          => $sequence($fallbackAssets),
+            'loops'             => $loopMeta,
         ];
     }
 
@@ -218,6 +239,10 @@ class BillboardSyncService
         foreach ($loops as $loop) {
             /** @var MediaLoop $loop */
             $loopQuota[$loop->id] = [
+                'name'              => $loop->name,
+                'campaign_id'       => $loop->campaign_id,
+                'is_fallback'       => (bool) $loop->is_fallback,
+                'is_bundle'         => (bool) $loop->is_bundle,
                 'max_daily_spots'   => $loop->max_daily_spots,
                 'spots_spent_today' => $loop->spotsSpentToday($billboard->timezone),
             ];

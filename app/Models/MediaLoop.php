@@ -19,6 +19,7 @@ class MediaLoop extends Model
         'campaign_id',
         'is_fallback',
         'is_global',
+        'is_bundle',
         'max_daily_spots',
         'assigned_billboards',
         'order_index',
@@ -27,6 +28,7 @@ class MediaLoop extends Model
     protected $casts = [
         'is_fallback'      => 'boolean',
         'is_global'        => 'boolean',
+        'is_bundle'        => 'boolean',
         'max_daily_spots' => 'integer',
         'assigned_billboards' => 'array',
     ];
