@@ -18,8 +18,36 @@ const PLAYBACK_TOLERANCE_MIN = 15;
 // and Expo schedulers so every engine paces the same way.
 const PACING_FACTOR = 0.75;
 
-function ymd(date) {
-  return date.toISOString().slice(0, 10);
+const clockFormatters = new Map();
+
+// Calendar date ('YYYY-MM-DD') and minutes past midnight on the billboard's own
+// clock. Flight dates and playback times are the board's local day, not UTC; with
+// no (or an unknown) timezone this falls back to the device clock.
+function boardClock(date, timezone) {
+  if (timezone) {
+    try {
+      if (!clockFormatters.has(timezone)) {
+        clockFormatters.set(timezone, new Intl.DateTimeFormat('en-CA', {
+          timeZone: timezone,
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+        }));
+      }
+      const parts = clockFormatters.get(timezone).formatToParts(date);
+      const part = (type) => parts.find((p) => p.type === type)?.value ?? '';
+      return {
+        ymd: `${part('year')}-${part('month')}-${part('day')}`,
+        minutes: (Number(part('hour')) % 24) * 60 + Number(part('minute')),
+      };
+    } catch {
+      // Unknown zone — use the device clock.
+    }
+  }
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    ymd: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    minutes: date.getHours() * 60 + date.getMinutes(),
+  };
 }
 
 export class Scheduler {
@@ -257,7 +285,7 @@ export class Scheduler {
   }
 
   _withinCampaign(detail, q, now) {
-    const today = ymd(now);
+    const today = boardClock(now, this.quota.billboard?.timezone).ymd;
     const startDate = detail?.campaign_start_date ?? q?.campaign_start_date;
     const endDate = detail?.campaign_end_date ?? q?.campaign_end_date;
     if (startDate && today < startDate) return false;
@@ -268,7 +296,7 @@ export class Scheduler {
   _withinPlaybackWindow(detail, q, now) {
     const slots = detail?.playback_times ?? q?.playback_times;
     if (!slots || slots.length === 0) return true;
-    const cur = now.getHours() * 60 + now.getMinutes();
+    const cur = boardClock(now, this.quota.billboard?.timezone).minutes;
     return slots.some((slot) => {
       const [h, m] = slot.split(":");
       const s = Number(h) * 60 + Number(m);
@@ -283,7 +311,8 @@ export class Scheduler {
     const q = this.quota.assets?.[assetId] || {};
     const w = this.work.assets[assetId] || { spotsRemaining: Infinity, playsToday: 0 };
 
-    if (w.spotsRemaining <= 0) return 'no_spots_remaining';
+    // A play costs the asset's footprint in spots.
+    if (w.spotsRemaining < this.footprint(assetId)) return 'no_spots_remaining';
     if (!this._withinCampaign(detail, q, now)) return 'outside_flight_dates';
     if (!this._withinPlaybackWindow(detail, q, now)) return 'outside_playback_window';
 
@@ -596,7 +625,7 @@ export class Scheduler {
       lastPlayedAt: null,
     });
 
-    if (w.spotsRemaining !== Infinity) w.spotsRemaining -= 1;
+    if (w.spotsRemaining !== Infinity) w.spotsRemaining -= event.footprint ?? 1;
     w.playsToday += 1;
     const t = Date.parse(event.played_at) || Date.now();
     w.recent.push(t);

@@ -358,3 +358,71 @@ test('Round-robins multiple campaign-specific fallbacks', () => {
   // Round-robin among campaign fallbacks: fb1, fb2, fb1
   assert.deepStrictEqual(picked, ['gamma_fb1', 'gamma_fb2', 'gamma_fb1']);
 });
+
+test('A play costs its footprint in spots; fewer spots than the footprint makes an asset ineligible', () => {
+  const loopId = 'loop-footprint';
+  const assetsById = new Map([
+    ['long', createAssetDetail('long', loopId, 0, { duration_secs: 30 })],
+  ]);
+
+  const schedule = {
+    primary: [{ asset_id: 'long', loop_id: loopId, order_index: 0 }],
+    loops: {
+      [loopId]: { id: loopId, name: 'Long Loop', is_fallback: false, is_bundle: false },
+    },
+    fallback: [],
+  };
+
+  const quota = {
+    seconds_per_spot: 15,
+    assets: { long: { play_spots_remaining: 3, footprint: 2 } },
+    loops: { [loopId]: { max_daily_spots: null, spots_spent_today: 0 } },
+  };
+
+  const rejections = [];
+  const scheduler = new Scheduler({
+    schedule, quota, assetsById,
+    onReject: (_id, reason) => rejections.push(reason),
+  });
+
+  const now = new Date();
+  const first = scheduler.pickNext(now);
+  assert.strictEqual(first?.asset_id, 'long');
+  scheduler.recordPlay(first, now);
+  assert.strictEqual(scheduler.work.assets.long.spotsRemaining, 1);
+
+  assert.strictEqual(scheduler.pickNext(new Date(now.getTime() + 30_000)), null);
+  assert.ok(rejections.includes('no_spots_remaining'));
+});
+
+test("Flight dates are judged on the billboard's local day, not UTC", () => {
+  const loopId = 'loop-flight';
+  const assetsById = new Map([['launch', createAssetDetail('launch', loopId, 0)]]);
+  const schedule = {
+    primary: [{ asset_id: 'launch', loop_id: loopId, order_index: 0 }],
+    loops: { [loopId]: { id: loopId, name: 'Launch', is_fallback: false, is_bundle: false } },
+    fallback: [],
+  };
+  const quotaFor = (timezone, window) => ({
+    seconds_per_spot: 15,
+    billboard: { timezone },
+    assets: { launch: { play_spots_remaining: 100, ...window } },
+    loops: { [loopId]: { max_daily_spots: null, spots_spent_today: 0 } },
+  });
+
+  // 16:30 UTC on Sep 30 is already Oct 1 in Tokyo.
+  const tokyo = new Scheduler({
+    schedule, assetsById,
+    quota: quotaFor('Asia/Tokyo', { campaign_start_date: '2026-10-01' }),
+  });
+  assert.strictEqual(tokyo.pickNext(new Date('2026-09-30T16:30:00Z'))?.asset_id, 'launch');
+
+  // 03:00 UTC on Nov 1 is still Oct 31 in Los Angeles...
+  const la = new Scheduler({
+    schedule, assetsById,
+    quota: quotaFor('America/Los_Angeles', { campaign_end_date: '2026-10-31' }),
+  });
+  assert.strictEqual(la.pickNext(new Date('2026-11-01T03:00:00Z'))?.asset_id, 'launch');
+  // ...until LA's own day turns over.
+  assert.strictEqual(la.pickNext(new Date('2026-11-01T08:00:00Z')), null);
+});

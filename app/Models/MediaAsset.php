@@ -155,15 +155,20 @@ class MediaAsset extends Model
         return [$from, $until];
     }
 
-    /** True when the given date falls within the effective flight window. */
+    /**
+     * True when the given moment's calendar date — in that moment's own timezone,
+     * i.e. the billboard's — falls within the effective flight window. Compared as
+     * dates so a board ahead of or behind UTC starts and stops on its local day.
+     */
     public function isWithinFlightWindow(\Carbon\Carbon $date): bool
     {
         [$from, $until] = $this->effectiveFlightWindow();
+        $today = $date->toDateString();
 
-        if ($from !== null && $date->lt($from->copy()->startOfDay())) {
+        if ($from !== null && $today < $from->toDateString()) {
             return false;
         }
-        if ($until !== null && $date->gt($until->copy()->endOfDay())) {
+        if ($until !== null && $today > $until->toDateString()) {
             return false;
         }
 
@@ -229,10 +234,10 @@ class MediaAsset extends Model
         return max(1, (int) ceil(((int) $this->duration_secs) / $secondsPerSpot));
     }
 
-    /** Deduct spots; clamp at zero. */
-    public function deductSpot(): void
+    /** Deduct spots (a Play costs its Footprint); clamp at zero. */
+    public function deductSpot(int $spots = 1): void
     {
-        $this->decrement('play_spots_remaining');
+        $this->decrement('play_spots_remaining', $spots);
         if ($this->play_spots_remaining < 0) {
             $this->update(['play_spots_remaining' => 0]);
         }

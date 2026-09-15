@@ -262,7 +262,7 @@ class BillboardSyncService
      * dashboard math in BillboardController so the billboard and dashboard agree on
      * total/played/open spots.
      *
-     * @return array{active_hours_start: ?string, active_hours_end: ?string, total_spots: int, played_spots: int, open_spots: int}
+     * @return array{timezone: ?string, active_hours_start: ?string, active_hours_end: ?string, total_spots: int, played_spots: int, open_spots: int}
      */
     public function billboardSpotState(Billboard $billboard): array
     {
@@ -284,6 +284,8 @@ class BillboardSyncService
         }
 
         return [
+            // The board judges flight dates and playback times on its local clock.
+            'timezone'           => $billboard->timezone,
             'active_hours_start' => $billboard->active_hours_start,
             'active_hours_end'   => $billboard->active_hours_end,
             'total_spots'        => $totalSpots,

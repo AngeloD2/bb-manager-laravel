@@ -63,6 +63,49 @@ class CampaignController extends Controller
         return (new CampaignResource($campaign->fresh()))->response();
     }
 
+    public function show(Campaign $campaign): JsonResponse
+    {
+        $campaign->loadCount('loops')->load(['loops.assets']);
+
+        return (new CampaignResource($campaign))->response();
+    }
+
+    /**
+     * Attach existing loops to this campaign.
+     */
+    public function attachLoops(Request $request, Campaign $campaign): JsonResponse
+    {
+        $data = $request->validate([
+            'loop_ids'   => ['required', 'array'],
+            'loop_ids.*' => ['required', 'uuid', 'exists:media_loops,id'],
+        ]);
+
+        \App\Models\MediaLoop::whereIn('id', $data['loop_ids'])
+            ->update(['campaign_id' => $campaign->id]);
+
+        $this->notifier->notifyScheduleChanged();
+
+        return response()->json([
+            'message'  => 'Loops attached to campaign.',
+            'campaign' => new CampaignResource($campaign->fresh()->loadCount('loops')->load(['loops.assets'])),
+        ]);
+    }
+
+    /**
+     * Detach a single loop from this campaign.
+     */
+    public function detachLoop(Campaign $campaign, \App\Models\MediaLoop $loop): JsonResponse
+    {
+        if ($loop->campaign_id === $campaign->id) {
+            $loop->update(['campaign_id' => null]);
+            $this->notifier->notifyScheduleChanged();
+        }
+
+        return response()->json([
+            'message' => 'Loop detached from campaign.',
+        ]);
+    }
+
     /**
      * Soft delete. Loops are detached rather than removed: unsold inventory is
      * still inventory, and a null campaign_id is exactly how a loop says so.

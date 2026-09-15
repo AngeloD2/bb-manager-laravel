@@ -135,14 +135,15 @@ class SpotManagerService
             // Fallback assets are also uncapped (unlimited filler).
             $isOverride = !empty($entry['was_override']);
             if (! $isOverride && ! $asset->isFallback()) {
-                $status = $this->constraintValidator->validate($asset);
+                // Judge flight dates and daily caps on the billboard's local day.
+                $status = $this->constraintValidator->validate($asset, [], null, 0, 0, 0, $billboard->timezone);
 
                 if ($status !== ConstraintValidationService::VALID) {
                     // Log the rejection but don't throw — just mark as rejected.
                     return 'rejected';
                 }
 
-                $asset->deductSpot();
+                $asset->deductSpot($asset->spotFootprint($secondsPerSpot));
             }
 
             try {

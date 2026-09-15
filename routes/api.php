@@ -70,8 +70,10 @@ Route::prefix('v1')->group(function () {
 
     Route::middleware(['auth:sanctum', 'admin.token'])->prefix('admin')->name('admin.')->group(function () {
 
-        // Billboards (board provisioning)
-        Route::apiResource('campaigns', CampaignController::class)->only(['index', 'store', 'update', 'destroy']);
+        // Campaigns
+        Route::apiResource('campaigns', CampaignController::class)->only(['index', 'show', 'store', 'update', 'destroy']);
+        Route::post('campaigns/{campaign}/attach-loops', [CampaignController::class, 'attachLoops'])->name('campaigns.attach-loops');
+        Route::delete('campaigns/{campaign}/loops/{loop}', [CampaignController::class, 'detachLoop'])->name('campaigns.detach-loop');
         Route::apiResource('zones', ZoneController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::apiResource('billboards', BillboardController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::get('billboards/{billboard}/fallback-spots', [FallbackSpotController::class, 'index'])->name('billboards.fallback-spots.index');

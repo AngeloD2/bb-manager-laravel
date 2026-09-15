@@ -15,6 +15,7 @@ class CampaignResource extends JsonResource
             'starts_on'  => $this->starts_on?->format('Y-m-d'),
             'ends_on'    => $this->ends_on?->format('Y-m-d'),
             'loops_count' => $this->whenCounted('loops'),
+            'loops'       => MediaLoopResource::collection($this->whenLoaded('loops')),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

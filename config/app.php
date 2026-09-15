@@ -123,4 +123,14 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Secure Share Links
+    |--------------------------------------------------------------------------
+    */
+
+    'share_link_ttl_hours' => (int) env('SHARE_LINK_TTL_HOURS', 2),
+
+    'share_link_base_url' => env('SHARE_LINK_BASE_URL', env('APP_URL', 'http://localhost').'/vault'),
+
 ];

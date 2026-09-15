@@ -34,7 +34,7 @@ class SpotManagerServiceTest extends TestCase
     // ── Spot deduction ───────────────────────────────────────────────────────
 
     /** @test */
-    public function it_deducts_one_token_per_accepted_log(): void
+    public function it_deducts_one_spot_for_a_single_spot_clip(): void
     {
         $asset = $this->makeAsset(spots: 10);
 
@@ -46,6 +46,36 @@ class SpotManagerServiceTest extends TestCase
             'id'                    => $asset->id,
             'play_spots_remaining' => 9,
         ]);
+    }
+
+    /** @test */
+    public function it_deducts_the_clip_footprint_per_accepted_log(): void
+    {
+        // 40s at the default 15s/spot occupies 3 spots.
+        $asset = $this->makeAsset(spots: 10, duration: 40);
+
+        $this->service->processBatch($this->billboard, [
+            ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
+        ]);
+
+        $this->assertDatabaseHas('media_assets', [
+            'id'                   => $asset->id,
+            'play_spots_remaining' => 7,
+        ]);
+    }
+
+    /** @test */
+    public function it_rejects_plays_when_remaining_spots_are_below_the_footprint(): void
+    {
+        $asset = $this->makeAsset(spots: 2, duration: 40);
+
+        $result = $this->service->processBatch($this->billboard, [
+            ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
+        ]);
+
+        $this->assertEquals(0, $result['accepted']);
+        $this->assertEquals(1, $result['rejected']);
+        $this->assertDatabaseHas('media_assets', ['id' => $asset->id, 'play_spots_remaining' => 2]);
     }
 
     /** @test */
@@ -203,7 +233,7 @@ class SpotManagerServiceTest extends TestCase
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private function makeAsset(int $spots, ?int $maxPerHour = null, ?string $folderId = null): MediaAsset
+    private function makeAsset(int $spots, ?int $maxPerHour = null, ?string $folderId = null, int $duration = 10): MediaAsset
     {
         return MediaAsset::create([
             'name'                  => 'Test Asset ' . uniqid(),
@@ -211,7 +241,7 @@ class SpotManagerServiceTest extends TestCase
             'file_type'             => 'VIDEO',
             'loop_id'             => $folderId,
             'size_bytes'            => 10_000_000,
-            'duration_secs'         => 10,
+            'duration_secs'         => $duration,
             'is_synced'             => true,
             'max_plays_per_hour'    => $maxPerHour,
             'play_spots_remaining' => $spots,

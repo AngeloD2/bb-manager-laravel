@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\MediaAsset;
 use App\Models\MediaLoop;
+use App\Models\Setting;
 
 /**
  * ConstraintValidationService
@@ -23,6 +24,8 @@ class ConstraintValidationService
     public const OUTSIDE_PLAYBACK_WINDOW = 'outside_playback_window';
 
     public const CONFLICT                = 'conflict';
+
+    private ?int $secondsPerSpot = null;
 
     /**
      * Validate whether an asset may be scheduled for the next play spot.
@@ -51,8 +54,8 @@ class ConstraintValidationService
             return self::OUTSIDE_PLAYBACK_WINDOW;
         }
 
-        // 1. Spot economy gate
-        if ($asset->play_spots_remaining <= 0) {
+        // 1. Spot economy gate: a Play costs the asset's Footprint in Spots
+        if ($asset->play_spots_remaining < $asset->spotFootprint($this->secondsPerSpot())) {
             return self::NO_SPOTS_REMAINING;
         }
 
@@ -102,6 +105,12 @@ class ConstraintValidationService
         }
 
         return self::VALID;
+    }
+
+    /** Global slot length in seconds (default 15), read once per service instance. */
+    private function secondsPerSpot(): int
+    {
+        return $this->secondsPerSpot ??= (int) (Setting::where('key', 'seconds_per_spot')->value('value') ?? 15);
     }
 
     /** Convenience: returns true only when fully eligible. */

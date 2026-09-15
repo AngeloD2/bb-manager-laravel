@@ -63,7 +63,7 @@ class QueueGenerationService
             $pd = $projDaily[$asset->id] ?? 0;
             $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
             
-            $validationResult = $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl);
+            $validationResult = $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl, $billboard->timezone);
             
             if ($validationResult === ConstraintValidationService::VALID) {
                 $validQueue[] = $item;
@@ -370,7 +370,7 @@ class QueueGenerationService
                         if ($passList->isNotEmpty()) {
                             // Atomic bundle: first asset governs whole bundle for this pass
                             $firstAsset = $passList->first();
-                            $firstVal = $this->isEligibleProjected($firstAsset, $history, $projHourly, $projDaily, $projLoopDaily);
+                            $firstVal = $this->isEligibleProjected($firstAsset, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
                             $firstDue = $this->isDue($firstAsset, $virtualMs, $lastPlayedMs);
 
                             if ($firstVal !== ConstraintValidationService::VALID || !$firstDue) {
@@ -385,7 +385,7 @@ class QueueGenerationService
                             } else {
                                 $startA = $assetIdx < $passList->count() ? $assetIdx : 0;
                                 $candidate = $passList[$startA];
-                                $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                                $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
                                 $candidateDue = $this->isDue($candidate, $virtualMs, $lastPlayedMs);
 
                                 if ($candidateVal === ConstraintValidationService::VALID && $candidateDue) {
@@ -421,7 +421,7 @@ class QueueGenerationService
 
                         for ($a = $startA; $a < $passList->count(); $a++) {
                             $candidate = $passList[$a];
-                            $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                            $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
                             $candidateDue = $this->isDue($candidate, $virtualMs, $lastPlayedMs);
 
                             if ($candidateVal === ConstraintValidationService::VALID && $candidateDue) {
@@ -465,7 +465,7 @@ class QueueGenerationService
                                 $fbPassList = $buildPassList($fbLoop);
 
                                 foreach ($fbPassList as $candidate) {
-                                    $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                                    $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
                                     if ($fbVal === ConstraintValidationService::VALID) {
                                         $selected = $candidate;
                                         $campaignFallbackCursors[$campaignId] = ($cCursor + 1) % $cFallbacks->count();
@@ -495,7 +495,7 @@ class QueueGenerationService
                     $fbPassList = $buildPassList($fbLoop);
 
                     foreach ($fbPassList as $candidate) {
-                        $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily);
+                        $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
                         if ($fbVal === ConstraintValidationService::VALID) {
                             $selected = $candidate;
                             $globalFallbackLoopIndex = ($globalFallbackLoopIndex + 1) % $fbCandidates->count();
@@ -561,13 +561,14 @@ class QueueGenerationService
         array $history,
         array $projHourly,
         array $projDaily,
-        array $projLoopDaily
+        array $projLoopDaily,
+        ?string $timezone = null
     ): string {
         $ph = $projHourly[$asset->id] ?? 0;
         $pd = $projDaily[$asset->id] ?? 0;
         $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
 
-        return $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl);
+        return $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl, $timezone);
     }
 
     /**

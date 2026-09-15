@@ -127,6 +127,40 @@ class CampaignTest extends TestCase
         );
     }
 
+    // ── Flight dates are the billboard's local day, not UTC ──────────────────
+
+    /** @test */
+    public function the_flight_window_is_judged_on_the_moments_own_calendar_day(): void
+    {
+        $campaign = Campaign::create(['name' => 'October', 'starts_on' => '2026-10-01', 'ends_on' => '2026-10-31']);
+        $asset = $this->asset($campaign);
+
+        // 16:30 UTC on Sep 30 is already Oct 1 in Tokyo.
+        $this->assertTrue($asset->isWithinFlightWindow(Carbon::parse('2026-09-30 16:30:00', 'UTC')->setTimezone('Asia/Tokyo')));
+        $this->assertFalse($asset->isWithinFlightWindow(Carbon::parse('2026-09-30 16:30:00', 'UTC')));
+        // 03:00 UTC on Nov 1 is still Oct 31 in Los Angeles.
+        $this->assertTrue($asset->isWithinFlightWindow(Carbon::parse('2026-11-01 03:00:00', 'UTC')->setTimezone('America/Los_Angeles')));
+    }
+
+    /** @test */
+    public function a_play_on_the_boards_first_local_day_is_accepted_while_utc_is_still_the_day_before(): void
+    {
+        $campaign = Campaign::create(['name' => 'October', 'starts_on' => '2026-10-01', 'ends_on' => '2026-10-31']);
+        $asset = $this->asset($campaign);
+        $billboard = Billboard::create(['name' => 'Shibuya', 'location' => 'Tokyo', 'timezone' => 'Asia/Tokyo']);
+
+        Carbon::setTestNow(Carbon::parse('2026-09-30 16:30:00', 'UTC'));
+        try {
+            $result = app(\App\Services\SpotManagerService::class)->processBatch($billboard, [
+                ['asset_id' => $asset->id, 'played_at' => now()->toIso8601String(), 'was_override' => false],
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $this->assertEquals(1, $result['accepted']);
+    }
+
     // ── A loop with no campaign is unsold inventory, not an error ────────────
 
     /** @test */
@@ -180,6 +214,54 @@ class CampaignTest extends TestCase
 
         $this->assertSoftDeleted('campaigns', ['id' => $campaign->id]);
         // Unsold inventory is still inventory.
+        $this->assertDatabaseHas('media_loops', ['id' => $loop->id, 'campaign_id' => null]);
+    }
+
+    /** @test */
+    public function an_admin_can_view_a_campaign_with_its_loops(): void
+    {
+        $campaign = Campaign::create(['name' => 'October', 'starts_on' => '2026-10-01', 'ends_on' => '2026-10-31']);
+        $loop = MediaLoop::create(['name' => 'October Promo', 'campaign_id' => $campaign->id]);
+
+        $this->actAsAdmin()
+            ->getJson("/api/v1/admin/campaigns/{$campaign->id}")
+            ->assertOk()
+            ->assertJsonPath('data.id', $campaign->id)
+            ->assertJsonPath('data.name', 'October')
+            ->assertJsonPath('data.loops_count', 1)
+            ->assertJsonPath('data.loops.0.id', $loop->id)
+            ->assertJsonPath('data.loops.0.name', 'October Promo');
+    }
+
+    /** @test */
+    public function an_admin_can_attach_loops_to_a_campaign(): void
+    {
+        $campaign = Campaign::create(['name' => 'October', 'starts_on' => '2026-10-01', 'ends_on' => '2026-10-31']);
+        $loop1 = MediaLoop::create(['name' => 'Unassigned Loop 1']);
+        $loop2 = MediaLoop::create(['name' => 'Unassigned Loop 2']);
+
+        $this->actAsAdmin()
+            ->postJson("/api/v1/admin/campaigns/{$campaign->id}/attach-loops", [
+                'loop_ids' => [$loop1->id, $loop2->id],
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Loops attached to campaign.');
+
+        $this->assertDatabaseHas('media_loops', ['id' => $loop1->id, 'campaign_id' => $campaign->id]);
+        $this->assertDatabaseHas('media_loops', ['id' => $loop2->id, 'campaign_id' => $campaign->id]);
+    }
+
+    /** @test */
+    public function an_admin_can_detach_a_loop_from_a_campaign(): void
+    {
+        $campaign = Campaign::create(['name' => 'October', 'starts_on' => '2026-10-01', 'ends_on' => '2026-10-31']);
+        $loop = MediaLoop::create(['name' => 'Attached Loop', 'campaign_id' => $campaign->id]);
+
+        $this->actAsAdmin()
+            ->deleteJson("/api/v1/admin/campaigns/{$campaign->id}/loops/{$loop->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Loop detached from campaign.');
+
         $this->assertDatabaseHas('media_loops', ['id' => $loop->id, 'campaign_id' => null]);
     }
 
