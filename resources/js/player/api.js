@@ -52,6 +52,18 @@ export async function reportStart(apiUrl, token, assetId) {
   }).catch(() => {});
 }
 
+export async function reportStop(apiUrl, token, reason = 'no_media_scheduled') {
+  const now = new Date().toISOString().replace('+00:00', 'Z');
+  await fetch(`${apiUrl}/playback/stop`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ stopped_at: now, reason }),
+  }).catch(() => {});
+}
+
 // Flush a batch of locally-recorded play events. Each carries a client_event_id
 // so the server can dedup and charge each spot exactly once, even on retry.
 // Returns the parsed response: { data: { results, billboard_state, ... } }.

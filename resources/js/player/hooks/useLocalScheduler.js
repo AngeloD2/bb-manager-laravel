@@ -7,7 +7,7 @@ import { loadHistory, persistHistory } from "../lib/session";
 // a mirror of the unsynced play queue, persists every play to IndexedDB, and
 // re-seeds from the server snapshot whenever a reconciling /sync lands (while
 // keeping not-yet-flushed local plays applied).
-export function useLocalScheduler({ schedule, quota, assetsById }) {
+export function useLocalScheduler({ schedule, quota, assetsById, isAssetReady }) {
   const schedulerRef = useRef(null);
   const pendingRef = useRef([]); // mirror of IndexedDB log_queue where synced=false
   const [historyReady, setHistoryReady] = useState(false);
@@ -19,6 +19,7 @@ export function useLocalScheduler({ schedule, quota, assetsById }) {
       schedule,
       quota,
       assetsById,
+      isAssetReady,
       pendingEvents: [],
       history: [],
       onReject: (assetId, reason) => {
@@ -39,7 +40,7 @@ export function useLocalScheduler({ schedule, quota, assetsById }) {
         if (!seen.has(e.client_event_id)) merged.push(e);
       }
       pendingRef.current = merged;
-      schedulerRef.current.reseed({ schedule, quota, assetsById, pendingEvents: merged, history });
+      schedulerRef.current.reseed({ schedule, quota, assetsById, pendingEvents: merged, history, isAssetReady });
       setHistoryReady(true);
     });
     return () => {
@@ -57,8 +58,9 @@ export function useLocalScheduler({ schedule, quota, assetsById }) {
       quota,
       assetsById,
       pendingEvents: pendingRef.current,
+      isAssetReady,
     });
-  }, [schedule, quota, assetsById, historyReady]);
+  }, [schedule, quota, assetsById, historyReady, isAssetReady]);
 
   const pickNext = useCallback(() => schedulerRef.current.pickNext(), []);
 

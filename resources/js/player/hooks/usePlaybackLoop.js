@@ -39,22 +39,21 @@ export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) 
       // Discard a result that a newer fetch (e.g. an override interrupt) has
       // already superseded — applying it would resurrect a stale asset.
       if (gen !== genRef.current) return;
+      fetchingRef.current = false;
       setCurrentAsset(asset);
       setNoAsset(!asset);
       if (!asset) {
         timeoutRef.current = setTimeout(() => {
-          fetchingRef.current = false;
           fetchNextRef.current?.();
         }, 60000); // 60 seconds instead of 3s; WebSockets will interrupt this if media is assigned
       } else {
         setPlayId((id) => id + 1);
-        fetchingRef.current = false;
       }
     },
     onError: (_err, gen) => {
       if (gen !== genRef.current) return;
+      fetchingRef.current = false;
       timeoutRef.current = setTimeout(() => {
-        fetchingRef.current = false;
         fetchNextRef.current?.();
       }, 5000);
     },
@@ -63,6 +62,8 @@ export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) 
   const fetchNext = useCallback(() => {
     if (!enabledRef.current) return;
     if (fetchingRef.current) return;
+    clearTimeout(timeoutRef.current);
+    timeoutRef.current = null;
     fetchingRef.current = true;
     interruptRef.current = false;
     setNoAsset(false);
@@ -91,7 +92,10 @@ export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) 
   // the loop and lose the frame it was holding.
   useEffect(() => {
     if (enabled && !currentAssetRef.current) fetchNext();
-    return () => clearTimeout(timeoutRef.current);
+    return () => {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    };
   }, [enabled, fetchNext]);
 
   // Retained for API compatibility; play-time accounting now happens via
@@ -112,14 +116,15 @@ export function usePlaybackLoop({ interruptRef, enabled = true, getNextAsset }) 
 
   const onVideoError = useCallback(() => {
     setCurrentAsset(null);
+    clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      fetchingRef.current = false;
-      fetchNext();
+      fetchNextRef.current?.();
     }, 1000);
-  }, [fetchNext]);
+  }, []);
 
   const interrupt = useCallback(() => {
     clearTimeout(timeoutRef.current);
+    timeoutRef.current = null;
     resetFetch();
     setCurrentAsset(null);
     fetchingRef.current = false;

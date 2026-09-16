@@ -6,7 +6,7 @@ import { useEdgeCache, usePrefetchAssets } from '../hooks/useEdgeCache';
 import { useConnectionStatus } from '../hooks/useConnectionStatus';
 import { useLocalScheduler } from '../hooks/useLocalScheduler';
 import { useSyncEngine } from '../hooks/useSyncEngine';
-import { reportStart, assetServeUrl } from '../api';
+import { reportStart, reportStop, assetServeUrl } from '../api';
 import { persistSession } from '../lib/session';
 
 const IMAGE_TYPES = new Set(['GIF', 'PHOTO']);
@@ -82,30 +82,41 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
     return map;
   }, [allAssets]);
 
-  // Download every asset in the loop (primary + fallback) before playing
-  // anything. usePlaybackLoop stays disabled until prefetch reports ready.
+  // Download assets in the loop (primary + fallback). Background downloads
+  // happen silently; playback is enabled as long as at least one asset is ready.
   const prefetchAssets = useMemo(() => {
     return allAssets
       .filter((a) => a?.id)
       .map((a) => ({
+        assetId: a.id,
         stableKey: assetServeUrl(apiUrl, a.id),
         fetchUrl: a.download_url || assetServeUrl(apiUrl, a.id),
       }));
   }, [allAssets, apiUrl]);
 
-  const { ready: assetsReady, progress } = usePrefetchAssets(prefetchAssets, token);
+  const {
+    ready: allAssetsReady,
+    isAssetReady,
+    hasReadyAssets,
+    progress,
+  } = usePrefetchAssets(prefetchAssets, token);
 
   // Local playback brain: picks the next asset offline and meters spots locally.
   const { pickNext, recordPlay, dropSynced, injectOverride, cancelOverride } = useLocalScheduler({
     schedule: syncState?.schedule,
     quota: syncState?.quota,
     assetsById,
+    isAssetReady,
   });
 
   const getNextAsset = useCallback(() => pickNext(), [pickNext]);
 
   const { currentAsset, noAsset, onVideoPlay, onVideoEnded, onVideoError, interrupt, playId } =
-    usePlaybackLoop({ interruptRef, enabled: assetsReady && !paused, getNextAsset });
+    usePlaybackLoop({
+      interruptRef,
+      enabled: (hasReadyAssets || allAssets.length === 0) && !paused,
+      getNextAsset,
+    });
 
   // Server is authoritative: a fresh /sync snapshot replaces local state and
   // re-seeds the scheduler (which re-applies still-unsynced plays).
@@ -140,9 +151,33 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
     persistSession({ apiUrl, token, syncData: syncState });
   }, [apiUrl, token, syncState]);
 
-  const { refresh } = useSyncEngine({
+  const currentAssetRef = useRef(currentAsset);
+  useEffect(() => { currentAssetRef.current = currentAsset; }, [currentAsset]);
+
+  // If no media is currently playing and assets are ready, kick the loop
+  // whenever a reconciling sync provides fresh schedule/assets or ready assets become available.
+  useEffect(() => {
+    if (hasReadyAssets && !paused && !currentAsset) {
+      interrupt();
+    }
+  }, [syncState, hasReadyAssets, paused, currentAsset, interrupt]);
+
+  const { flush, refresh } = useSyncEngine({
     apiUrl, token, isOnline, paused, dropSynced, onReconcile, onAuthLost,
   });
+
+  const stopReportedRef = useRef(false);
+  useEffect(() => {
+    if (noAsset) {
+      if (!stopReportedRef.current) {
+        stopReportedRef.current = true;
+        flush();
+        reportStop(apiUrl, token, 'no_media_scheduled');
+      }
+    } else {
+      stopReportedRef.current = false;
+    }
+  }, [noAsset, flush, apiUrl, token]);
 
   const handleCommand = useCallback((command, payload) => {
     // ── Pause / resume ────────────────────────────────────────────────────
@@ -228,7 +263,19 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
       return;
     }
 
-    // For 'sync' and other loop-cutting commands:
+    // For 'sync' command:
+    if (command === 'sync') {
+      refresh().then(() => {
+        // If the board was idle (e.g. no media scheduled), wake up playback
+        // immediately now that the fresh schedule has landed. If media is already
+        // playing, let it finish its run naturally without interruption.
+        if (!currentAssetRef.current) {
+          interrupt();
+        }
+      });
+      return;
+    }
+
     interruptRef.current = true;
     clearTimeout(advanceTimerRef.current);
     if (videoRef.current) videoRef.current.pause();
@@ -420,13 +467,16 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
     ? 'Asset not in edge cache'
     : null;
 
-  // Hold the screen while the full loop downloads up front, or if an
-  // individual asset is still streaming in on demand.
-  const preloading = !assetsReady;
+  // Only hold the screen if no media is currently playing and initial assets
+  // are preloading, or if an active asset is streaming in on demand.
+  // Active media continues playing uninterrupted while new assets download in background.
+  const isPlayingMedia = !!currentAsset && !!src;
+  const preloading = !allAssetsReady && !isPlayingMedia;
+  const showDownloading = !errorMessage && !isPlayingMedia && (preloading || downloading);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#000', overflow: 'hidden' }}>
-      {!errorMessage && (preloading || downloading) && (
+      {showDownloading && (
         <DownloadingOverlay progress={preloading ? progress : null} />
       )}
       {errorMessage && <ErrorOverlay message={errorMessage} />}

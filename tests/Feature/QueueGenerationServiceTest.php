@@ -353,4 +353,18 @@ class QueueGenerationServiceTest extends TestCase
             'date'         => now()->format('Y-m-d'),
         ]);
     }
+
+    /** @test */
+    public function it_does_not_schedule_asset_more_times_than_remaining_spots(): void
+    {
+        $loop = MediaLoop::create(['name' => 'SingleSpotLoop', 'is_fallback' => false, 'is_global' => true]);
+        $asset = $this->asset('one_spot_clip', $loop, 0, ['play_spots_remaining' => 1]);
+
+        $billboard = Billboard::create(['name' => 'Board Single Spot Test']);
+
+        $queue = app(QueueGenerationService::class)->getUpcomingQueue($billboard, 5);
+        $names = array_map(fn ($i) => $i['asset_name'], $queue);
+
+        $this->assertSame(['one_spot_clip'], $names);
+    }
 }

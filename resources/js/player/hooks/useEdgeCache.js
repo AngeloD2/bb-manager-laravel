@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const CACHE_NAME = "bcc-edge-cache-v1";
 const CACHE_LIMIT = 3;
@@ -156,13 +156,18 @@ export function usePrefetchAssets(items, token) {
   // instead would cost an extra render pass on every loop change.
   const [readyKey, setReadyKey] = useState(null);
   const [progressState, setProgressState] = useState({ key: null, done: 0 });
+  const [readyAssetIds, setReadyAssetIds] = useState(() => new Set());
 
   const normalizedItems = useMemo(() => {
     return (items || []).filter(Boolean).map((item) => {
       if (typeof item === "string") {
-        return { stableKey: item, fetchUrl: item };
+        return { stableKey: item, fetchUrl: item, assetId: item };
       }
-      return item;
+      return {
+        stableKey: item.stableKey,
+        fetchUrl: item.fetchUrl || item.stableKey,
+        assetId: item.assetId ?? item.stableKey,
+      };
     });
   }, [items]);
 
@@ -187,6 +192,14 @@ export function usePrefetchAssets(items, token) {
       batch.items.map(async (item) => {
         try {
           await prefetchAsset(item.stableKey, item.fetchUrl, token);
+          if (!cancelled) {
+            setReadyAssetIds((prev) => {
+              if (prev.has(item.assetId)) return prev;
+              const next = new Set(prev);
+              next.add(item.assetId);
+              return next;
+            });
+          }
         } catch (err) {
           console.error(
             "[usePrefetchAssets] failed to prefetch",
@@ -212,7 +225,20 @@ export function usePrefetchAssets(items, token) {
     [progressState, key, total],
   );
 
-  return { ready: total === 0 || readyKey === key, progress };
+  const isAssetReady = useCallback(
+    (assetId) => readyAssetIds.has(assetId),
+    [readyAssetIds],
+  );
+
+  const hasReadyAssets = total === 0 || readyAssetIds.size > 0;
+
+  return {
+    ready: total === 0 || readyKey === key,
+    readyAssetIds,
+    isAssetReady,
+    hasReadyAssets,
+    progress,
+  };
 }
 
 export function useEdgeCache(stableKey, fetchUrl, offlineMode, token) {

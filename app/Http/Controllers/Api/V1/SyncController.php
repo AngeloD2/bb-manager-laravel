@@ -163,6 +163,45 @@ class SyncController extends Controller
     }
 
     /**
+     * POST /api/v1/playback/stop
+     *
+     * Invoked by a billboard to notify that it has stopped playback (e.g. queue exhausted).
+     * Broadcasts the event to all listeners of the billboard's WebSocket channel.
+     */
+    public function reportPlaybackStop(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'stopped_at' => ['nullable', 'date'],
+            'reason'     => ['nullable', 'string'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        /** @var \App\Models\Billboard $billboard */
+        $billboard = $request->user();
+        $stoppedAt = $request->input('stopped_at', now()->toIso8601String());
+        $reason    = $request->input('reason');
+
+        // Broadcast via Reverb/Pusher if configured
+        try {
+            broadcast(new \App\Events\PlaybackStopped($billboard, $stoppedAt, $reason));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Broadcast failed: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'message' => 'Playback stop event broadcasted.',
+            'data'    => [
+                'billboard_id' => $billboard->id,
+                'stopped_at'   => $stoppedAt,
+                'reason'       => $reason,
+            ],
+        ], 200);
+    }
+
+    /**
      * GET /api/v1/assets/{assetId}/serve
      *
      * Sanctum-authenticated auth gate: validates billboard access then issues a

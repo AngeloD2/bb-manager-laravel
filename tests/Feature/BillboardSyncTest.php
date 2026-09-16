@@ -11,6 +11,7 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 use Illuminate\Support\Facades\Event;
 use App\Events\PlaybackStarted;
+use App\Events\PlaybackStopped;
 
 class BillboardSyncTest extends TestCase
 {
@@ -495,6 +496,38 @@ class BillboardSyncTest extends TestCase
                 return $event->asset->id === $asset->id &&
                        $event->billboard->id === $this->billboard->id &&
                        $event->startedAt === $startedAt;
+            }
+        );
+    }
+
+    /** @test */
+    public function billboard_can_report_playback_stop(): void
+    {
+        Event::fake();
+
+        $this->actAsBillboard();
+        $stoppedAt = now()->toIso8601String();
+
+        $this->postJson('/api/v1/playback/stop', [
+            'stopped_at' => $stoppedAt,
+            'reason'     => 'no_media_scheduled',
+        ])
+            ->assertOk()
+            ->assertJsonStructure([
+                'message',
+                'data' => [
+                    'billboard_id',
+                    'stopped_at',
+                    'reason',
+                ],
+            ]);
+
+        Event::assertDispatched(
+            PlaybackStopped::class,
+            function (PlaybackStopped $event) use ($stoppedAt) {
+                return $event->billboard->id === $this->billboard->id &&
+                       $event->stoppedAt === $stoppedAt &&
+                       $event->reason === 'no_media_scheduled';
             }
         );
     }

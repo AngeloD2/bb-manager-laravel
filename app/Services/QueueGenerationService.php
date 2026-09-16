@@ -36,11 +36,12 @@ class QueueGenerationService
         $secondsPerSpot = (int) (Setting::where('key', 'seconds_per_spot')->value('value') ?? 15);
 
         // Running tallies of spots already scheduled in the queue we are rebuilding,
-        // so per-hour / per-day / loop caps are enforced across the WHOLE visible
+        // so per-hour / per-day / loop caps and spot budgets are enforced across the WHOLE visible
         // queue (retained items + freshly generated ones), not just past plays.
         $projHourly = [];    // asset_id => play count scheduled this batch
         $projDaily = [];     // asset_id => play count scheduled this batch
         $projLoopDaily = []; // loop_id  => slot footprint scheduled this batch
+        $projSpots = [];     // asset_id => slot footprint scheduled this batch
 
         $validQueue = [];
         $history = [];
@@ -62,16 +63,19 @@ class QueueGenerationService
             $ph = $projHourly[$asset->id] ?? 0;
             $pd = $projDaily[$asset->id] ?? 0;
             $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
+            $ps = $projSpots[$asset->id] ?? 0;
             
-            $validationResult = $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl, $billboard->timezone);
+            $validationResult = $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl, $billboard->timezone, $ps);
             
             if ($validationResult === ConstraintValidationService::VALID) {
                 $validQueue[] = $item;
                 $history[] = $item['asset_id'];
+                $footprint = $asset->spotFootprint($secondsPerSpot);
                 $projHourly[$asset->id] = $ph + 1;
                 $projDaily[$asset->id] = $pd + 1;
+                $projSpots[$asset->id] = $ps + $footprint;
                 if ($asset->loop_id) {
-                    $projLoopDaily[$asset->loop_id] = $pl + $asset->spotFootprint($secondsPerSpot);
+                    $projLoopDaily[$asset->loop_id] = $pl + $footprint;
                 }
             } else {
                 // If rejected in existing queue, we also tally it for issue 16 (rejection tracking)
@@ -97,7 +101,7 @@ class QueueGenerationService
 
             $newItems = $this->generateNextSequence(
                 $billboard, $itemsToGenerate, $history,
-                $projHourly, $projDaily, $projLoopDaily, $secondsPerSpot
+                $projHourly, $projDaily, $projLoopDaily, $projSpots, $secondsPerSpot
             );
             $queue = array_merge($queue, $newItems);
             $this->saveQueue($billboard, $queue);
@@ -215,6 +219,7 @@ class QueueGenerationService
         array $projHourly = [],
         array $projDaily = [],
         array $projLoopDaily = [],
+        array $projSpots = [],
         int $secondsPerSpot = 15
     ): array {
         $loopOrder = collect($billboard->loop_orders ?? [])->flip(); // loop_id => position
@@ -370,7 +375,7 @@ class QueueGenerationService
                         if ($passList->isNotEmpty()) {
                             // Atomic bundle: first asset governs whole bundle for this pass
                             $firstAsset = $passList->first();
-                            $firstVal = $this->isEligibleProjected($firstAsset, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
+                            $firstVal = $this->isEligibleProjected($firstAsset, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                             $firstDue = $this->isDue($firstAsset, $virtualMs, $lastPlayedMs);
 
                             if ($firstVal !== ConstraintValidationService::VALID || !$firstDue) {
@@ -385,7 +390,7 @@ class QueueGenerationService
                             } else {
                                 $startA = $assetIdx < $passList->count() ? $assetIdx : 0;
                                 $candidate = $passList[$startA];
-                                $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
+                                $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                                 $candidateDue = $this->isDue($candidate, $virtualMs, $lastPlayedMs);
 
                                 if ($candidateVal === ConstraintValidationService::VALID && $candidateDue) {
@@ -421,7 +426,7 @@ class QueueGenerationService
 
                         for ($a = $startA; $a < $passList->count(); $a++) {
                             $candidate = $passList[$a];
-                            $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
+                            $candidateVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                             $candidateDue = $this->isDue($candidate, $virtualMs, $lastPlayedMs);
 
                             if ($candidateVal === ConstraintValidationService::VALID && $candidateDue) {
@@ -465,7 +470,7 @@ class QueueGenerationService
                                 $fbPassList = $buildPassList($fbLoop);
 
                                 foreach ($fbPassList as $candidate) {
-                                    $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
+                                    $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                                     if ($fbVal === ConstraintValidationService::VALID) {
                                         $selected = $candidate;
                                         $campaignFallbackCursors[$campaignId] = ($cCursor + 1) % $cFallbacks->count();
@@ -495,7 +500,7 @@ class QueueGenerationService
                     $fbPassList = $buildPassList($fbLoop);
 
                     foreach ($fbPassList as $candidate) {
-                        $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $billboard->timezone);
+                        $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                         if ($fbVal === ConstraintValidationService::VALID) {
                             $selected = $candidate;
                             $globalFallbackLoopIndex = ($globalFallbackLoopIndex + 1) % $fbCandidates->count();
@@ -516,7 +521,16 @@ class QueueGenerationService
             if (!$selected) {
                 $anyWithSpots = MediaAsset::where('play_spots_remaining', '>', 0)
                     ->get()
-                    ->filter(fn($a) => $this->isAssignedToBillboard($a, $billboard));
+                    ->filter(function ($a) use ($billboard, $projSpots, $secondsPerSpot) {
+                        if (!$this->isAssignedToBillboard($a, $billboard)) {
+                            return false;
+                        }
+                        if ($a->isFallback()) {
+                            return true;
+                        }
+                        $spotsNeeded = $a->spotFootprint($secondsPerSpot);
+                        return ($a->play_spots_remaining - ($projSpots[$a->id] ?? 0)) >= $spotsNeeded;
+                    });
                 if ($anyWithSpots->isNotEmpty()) {
                     $selected = $anyWithSpots->random();
                 }
@@ -528,6 +542,7 @@ class QueueGenerationService
                 // hourly/daily/loop budget and yields to the fallback once capped.
                 $projHourly[$selected->id] = ($projHourly[$selected->id] ?? 0) + 1;
                 $projDaily[$selected->id] = ($projDaily[$selected->id] ?? 0) + 1;
+                $projSpots[$selected->id] = ($projSpots[$selected->id] ?? 0) + $selected->spotFootprint($secondsPerSpot);
                 if ($selected->loop_id) {
                     $projLoopDaily[$selected->loop_id] = ($projLoopDaily[$selected->loop_id] ?? 0)
                         + $selected->spotFootprint($secondsPerSpot);
@@ -562,13 +577,15 @@ class QueueGenerationService
         array $projHourly,
         array $projDaily,
         array $projLoopDaily,
+        array $projSpots = [],
         ?string $timezone = null
     ): string {
         $ph = $projHourly[$asset->id] ?? 0;
         $pd = $projDaily[$asset->id] ?? 0;
         $pl = $asset->loop_id ? ($projLoopDaily[$asset->loop_id] ?? 0) : 0;
+        $ps = $projSpots[$asset->id] ?? 0;
 
-        return $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl, $timezone);
+        return $this->constraintValidator->validate($asset, $history, null, $ph, $pd, $pl, $timezone, $ps);
     }
 
     /**

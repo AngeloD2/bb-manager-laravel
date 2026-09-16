@@ -59,14 +59,17 @@ export class Scheduler {
    * @param {Array}    [opts.pendingEvents]  unsynced play events to replay onto the snapshot
    * @param {Array}    [opts.history]        initial playback history of asset IDs
    * @param {Function} [opts.onReject]       callback (assetId, reason) => void
+   * @param {Function} [opts.isAssetReady]   optional predicate (assetId) => boolean indicating if media is cached/ready
    */
-  constructor({ schedule, quota, assetsById, pendingEvents = [], history = [], onReject = null }) {
+  constructor({ schedule, quota, assetsById, pendingEvents = [], history = [], onReject = null, isAssetReady = null }) {
     this.onReject = onReject;
-    this.reseed({ schedule, quota, assetsById, pendingEvents, history });
+    this.isAssetReady = isAssetReady;
+    this.reseed({ schedule, quota, assetsById, pendingEvents, history, isAssetReady });
   }
 
   /** Reset to a fresh server snapshot, re-applying any still-unsynced plays. */
-  reseed({ schedule, quota, assetsById, pendingEvents = [], history = [] }) {
+  reseed({ schedule, quota, assetsById, pendingEvents = [], history = [], isAssetReady }) {
+    if (isAssetReady !== undefined) this.isAssetReady = isAssetReady;
     const prevPrimaryId = this.lastPickedPrimaryId;
     const prevFallbackCursor = this.globalFallbackCursor || this.fallbackCursor || 0;
     const prevLastAssetId = this.lastAssetId;
@@ -80,15 +83,13 @@ export class Scheduler {
     this.primaryLoops = this._groupLoops(this.schedule.primary || [], false);
 
     // Group fallback schedule into loops and partition into campaign-specific vs global
-    let fallbackSlots = [];
-    if (Array.isArray(this.schedule.fallback) && this.schedule.fallback.length > 0) {
-      fallbackSlots = this.schedule.fallback;
-    } else {
-      fallbackSlots = [
-        ...(Array.isArray(this.schedule.campaign_fallback) ? this.schedule.campaign_fallback : []),
-        ...(Array.isArray(this.schedule.global_fallback) ? this.schedule.global_fallback : []),
-      ];
-    }
+    const fallbackSlots =
+      Array.isArray(this.schedule.fallback) && this.schedule.fallback.length > 0
+        ? this.schedule.fallback
+        : [
+            ...(Array.isArray(this.schedule.campaign_fallback) ? this.schedule.campaign_fallback : []),
+            ...(Array.isArray(this.schedule.global_fallback) ? this.schedule.global_fallback : []),
+          ];
 
     this.allFallbackLoops = this._groupLoops(fallbackSlots, true);
     this.campaignFallbackLoops = new Map();
@@ -308,6 +309,7 @@ export class Scheduler {
   _eligible(assetId, now) {
     const detail = this.assetsById.get(assetId);
     if (!detail) return 'missing_asset';
+    if (this.isAssetReady && !this.isAssetReady(assetId)) return 'downloading';
     const q = this.quota.assets?.[assetId] || {};
     const w = this.work.assets[assetId] || { spotsRemaining: Infinity, playsToday: 0 };
 
@@ -503,6 +505,9 @@ export class Scheduler {
             this.assetIdx = 0;
             this.activeLoopPassList = null;
             this.activeLoopId = null;
+            if (startA > 0 && loops.length === 1) {
+              continue;
+            }
           }
         }
 
@@ -519,7 +524,7 @@ export class Scheduler {
 
               for (const candidateId of fbPassList) {
                 const fbReason = this._eligible(candidateId, now);
-                if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window')) {
+                if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window' && fbReason !== 'downloading')) {
                   selectedAssetId = candidateId;
                   this.campaignFallbackCursors.set(loop.campaignId, (cCursor + 1) % cFallbacks.length);
                   break;
@@ -555,7 +560,7 @@ export class Scheduler {
 
         for (const candidateId of fbPassList) {
           const fbReason = this._eligible(candidateId, now);
-          if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window')) {
+          if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window' && fbReason !== 'downloading')) {
             selectedAssetId = candidateId;
             this.globalFallbackCursor = (this.globalFallbackCursor + 1) % fbCandidates.length;
             break;
@@ -579,7 +584,7 @@ export class Scheduler {
         const assetId = fallback[idx].asset_id;
         if (this.assetsById.has(assetId)) {
           const reason = this._eligible(assetId, now);
-          if (reason === 'valid' || (reason !== 'conflict' && reason !== 'missing_asset' && reason !== 'outside_flight_dates' && reason !== 'outside_playback_window')) {
+          if (reason === 'valid' || (reason !== 'conflict' && reason !== 'missing_asset' && reason !== 'outside_flight_dates' && reason !== 'outside_playback_window' && reason !== 'downloading')) {
             this.globalFallbackCursor = (idx + 1) % fallback.length;
             selectedAssetId = assetId;
             break;

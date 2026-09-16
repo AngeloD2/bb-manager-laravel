@@ -39,7 +39,8 @@ class ConstraintValidationService
         int $projectedHourly = 0,
         int $projectedDaily = 0,
         int $projectedLoopDaily = 0,
-        ?string $timezone = null
+        ?string $timezone = null,
+        int $projectedSpots = 0
     ): string {
         $tz = $timezone ?? config('app.timezone', 'UTC');
         $now ??= now($tz);
@@ -54,9 +55,13 @@ class ConstraintValidationService
             return self::OUTSIDE_PLAYBACK_WINDOW;
         }
 
-        // 1. Spot economy gate: a Play costs the asset's Footprint in Spots
-        if ($asset->play_spots_remaining < $asset->spotFootprint($this->secondsPerSpot())) {
-            return self::NO_SPOTS_REMAINING;
+        // 1. Spot economy gate: a Play costs the asset's Footprint in Spots.
+        // Fallback/filler assets are unlimited by design.
+        if (!$asset->isFallback()) {
+            $spotsNeeded = $asset->spotFootprint($this->secondsPerSpot()) + $projectedSpots;
+            if ($asset->play_spots_remaining < $spotsNeeded) {
+                return self::NO_SPOTS_REMAINING;
+            }
         }
 
         // The $projected* counts represent spots already scheduled for this asset

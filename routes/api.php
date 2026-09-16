@@ -56,6 +56,10 @@ Route::prefix('v1')->group(function () {
         ->post('/playback/start', [SyncController::class, 'reportPlaybackStart'])
         ->name('sync.playback-start');
 
+    Route::middleware(['auth:sanctum', 'billboard.token:billboard:sync'])
+        ->post('/playback/stop', [SyncController::class, 'reportPlaybackStop'])
+        ->name('sync.playback-stop');
+
 
     // ── Authentication Routes ─────────────────────────────────────────────────
     Route::post('/login', [App\Http\Controllers\Api\V1\AuthController::class, 'login'])->name('login');
