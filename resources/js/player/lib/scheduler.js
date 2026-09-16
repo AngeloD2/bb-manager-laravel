@@ -326,7 +326,7 @@ export class Scheduler {
     // A play costs the asset's footprint in spots (fallback assets are unlimited filler).
     if (!isFallback && w.spotsRemaining < this.footprint(assetId)) return 'no_spots_remaining';
     if (!isFallback && !this._withinCampaign(detail, q, now)) return 'outside_flight_dates';
-    if (!this._withinPlaybackWindow(detail, q, now)) return 'outside_playback_window';
+    if (!isFallback && !this._withinPlaybackWindow(detail, q, now)) return 'outside_playback_window';
 
     if (q.max_plays_per_hour != null &&
         this._playsLastHour(assetId, now.getTime()) >= q.max_plays_per_hour) {
