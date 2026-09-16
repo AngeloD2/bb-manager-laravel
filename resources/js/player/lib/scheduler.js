@@ -112,6 +112,7 @@ export class Scheduler {
     this.activeLoopId = null;
 
     this.campaignFallbackCursors = this.campaignFallbackCursors || new Map();
+    this.fallbackAssetCursors = this.fallbackAssetCursors || new Map();
     this.globalFallbackCursor = prevFallbackCursor;
     this.lastAssetId = prevLastAssetId;
     this.lastPickedPrimaryId = prevPrimaryId;
@@ -119,8 +120,9 @@ export class Scheduler {
     // Working counters derived from the snapshot, then advanced by unsynced plays.
     this.work = { assets: {}, loops: {} };
     for (const [id, a] of Object.entries(this.quota.assets || {})) {
+      const isFallback = this._isFallbackAsset(id);
       this.work.assets[id] = {
-        spotsRemaining: a.play_spots_remaining ?? Infinity,
+        spotsRemaining: isFallback ? Infinity : (a.play_spots_remaining ?? Infinity),
         playsToday: a.plays_today ?? 0,
         // Recent local play timestamps (ms) for the hourly window.
         recent: [],
@@ -306,15 +308,25 @@ export class Scheduler {
     });
   }
 
+  _isFallbackAsset(assetId) {
+    const detail = this.assetsById?.get(assetId);
+    const loopId = detail?.loop_id || this._findLoopIdForAsset(assetId);
+    if (!loopId) return false;
+    if (this.quota?.loops?.[loopId]?.is_fallback) return true;
+    if (this.schedule?.loops?.[loopId]?.is_fallback) return true;
+    return this.allFallbackLoops?.some((l) => l.loopId === loopId && l.isFallback) ?? false;
+  }
+
   _eligible(assetId, now) {
     const detail = this.assetsById.get(assetId);
     if (!detail) return 'missing_asset';
     if (this.isAssetReady && !this.isAssetReady(assetId)) return 'downloading';
     const q = this.quota.assets?.[assetId] || {};
     const w = this.work.assets[assetId] || { spotsRemaining: Infinity, playsToday: 0 };
+    const isFallback = this._isFallbackAsset(assetId);
 
-    // A play costs the asset's footprint in spots.
-    if (w.spotsRemaining < this.footprint(assetId)) return 'no_spots_remaining';
+    // A play costs the asset's footprint in spots (fallback assets are unlimited filler).
+    if (!isFallback && w.spotsRemaining < this.footprint(assetId)) return 'no_spots_remaining';
     if (!this._withinCampaign(detail, q, now)) return 'outside_flight_dates';
     if (!this._withinPlaybackWindow(detail, q, now)) return 'outside_playback_window';
 
@@ -521,11 +533,15 @@ export class Scheduler {
             while (fbAttempts < cFallbacks.length && !selectedAssetId) {
               const fbLoop = cFallbacks[cCursor % cFallbacks.length];
               const fbPassList = this._buildPassList(fbLoop);
+              const startA = this.fallbackAssetCursors.get(fbLoop.loopId) || 0;
 
-              for (const candidateId of fbPassList) {
+              for (let a = 0; a < fbPassList.length; a++) {
+                const idx = (startA + a) % fbPassList.length;
+                const candidateId = fbPassList[idx];
                 const fbReason = this._eligible(candidateId, now);
                 if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window' && fbReason !== 'downloading')) {
                   selectedAssetId = candidateId;
+                  this.fallbackAssetCursors.set(fbLoop.loopId, (idx + 1) % fbPassList.length);
                   this.campaignFallbackCursors.set(loop.campaignId, (cCursor + 1) % cFallbacks.length);
                   break;
                 } else {
@@ -557,11 +573,15 @@ export class Scheduler {
       while (fbAttempts < fbCandidates.length && !selectedAssetId) {
         const fbLoop = fbCandidates[this.globalFallbackCursor % fbCandidates.length];
         const fbPassList = this._buildPassList(fbLoop);
+        const startA = this.fallbackAssetCursors.get(fbLoop.loopId) || 0;
 
-        for (const candidateId of fbPassList) {
+        for (let a = 0; a < fbPassList.length; a++) {
+          const idx = (startA + a) % fbPassList.length;
+          const candidateId = fbPassList[idx];
           const fbReason = this._eligible(candidateId, now);
           if (fbReason === 'valid' || (fbReason !== 'conflict' && fbReason !== 'missing_asset' && fbReason !== 'outside_flight_dates' && fbReason !== 'outside_playback_window' && fbReason !== 'downloading')) {
             selectedAssetId = candidateId;
+            this.fallbackAssetCursors.set(fbLoop.loopId, (idx + 1) % fbPassList.length);
             this.globalFallbackCursor = (this.globalFallbackCursor + 1) % fbCandidates.length;
             break;
           } else {
@@ -630,7 +650,9 @@ export class Scheduler {
       lastPlayedAt: null,
     });
 
-    if (w.spotsRemaining !== Infinity) w.spotsRemaining -= event.footprint ?? 1;
+    if (w.spotsRemaining !== Infinity && !this._isFallbackAsset(event.asset_id)) {
+      w.spotsRemaining -= event.footprint ?? 1;
+    }
     w.playsToday += 1;
     const t = Date.parse(event.played_at) || Date.now();
     w.recent.push(t);

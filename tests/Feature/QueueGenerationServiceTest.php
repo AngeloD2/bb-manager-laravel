@@ -367,4 +367,35 @@ class QueueGenerationServiceTest extends TestCase
 
         $this->assertSame(['one_spot_clip'], $names);
     }
+
+    /** @test */
+    public function it_schedules_fallback_loop_assets_even_with_zero_remaining_spots_and_rotates_them(): void
+    {
+        // Campaign asset is fully exhausted (0 spots) — should never appear.
+        $campaignLoop = MediaLoop::create(['name' => 'Campaign Loop', 'is_fallback' => false, 'is_global' => true]);
+        $this->asset('exhausted_campaign_asset', $campaignLoop, 0, ['play_spots_remaining' => 0]);
+
+        // Fallback loop with two assets, both at 0 spots — must still play and rotate.
+        $fallbackLoop = MediaLoop::create(['name' => 'Fallback Loop', 'is_fallback' => true, 'is_global' => true]);
+        $fb1 = $this->asset('fallback_asset_1', $fallbackLoop, 0, ['play_spots_remaining' => 0]);
+        $fb2 = $this->asset('fallback_asset_2', $fallbackLoop, 1, ['play_spots_remaining' => 0]);
+
+        $billboard = Billboard::create([
+            'name'        => 'Board Fallback Test',
+            'loop_orders' => [$campaignLoop->id, $fallbackLoop->id],
+        ]);
+
+        $queue = app(QueueGenerationService::class)->getUpcomingQueue($billboard, 4);
+        $names = array_map(fn ($i) => $i['asset_name'], $queue);
+
+        // Exhausted campaign asset must not appear.
+        $this->assertNotContains('exhausted_campaign_asset', $names, 'Exhausted campaign asset must not be scheduled');
+
+        // All 4 slots must be filled by fallback assets (not empty).
+        $this->assertCount(4, $names, 'All 4 slots must be filled by fallback assets');
+
+        // Both fallback assets must appear — round-robin rotation.
+        $this->assertContains('fallback_asset_1', $names, 'fallback_asset_1 must be scheduled');
+        $this->assertContains('fallback_asset_2', $names, 'fallback_asset_2 must be scheduled');
+    }
 }

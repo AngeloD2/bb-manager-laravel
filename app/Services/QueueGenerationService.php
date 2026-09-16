@@ -318,6 +318,8 @@ class QueueGenerationService
         $assetIdx = 0;
         $globalFallbackLoopIndex = 0;
         $campaignFallbackCursors = []; // campaign_id => cursor index
+        $campaignFallbackAssetCursors = []; // loop_id => asset cursor index
+        $globalFallbackAssetCursors = []; // loop_id => asset cursor index
         $activeLoopPassList = null;
         $activeLoopId = null;
 
@@ -468,11 +470,14 @@ class QueueGenerationService
                             while ($fbAttempts < $cFallbacks->count() && !$selected) {
                                 $fbLoop = $cFallbacks[$cCursor % $cFallbacks->count()];
                                 $fbPassList = $buildPassList($fbLoop);
+                                $startA = $campaignFallbackAssetCursors[$fbLoop->id] ?? 0;
 
-                                foreach ($fbPassList as $candidate) {
+                                for ($a = 0; $a < $fbPassList->count(); $a++) {
+                                    $candidate = $fbPassList[($startA + $a) % $fbPassList->count()];
                                     $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                                     if ($fbVal === ConstraintValidationService::VALID) {
                                         $selected = $candidate;
+                                        $campaignFallbackAssetCursors[$fbLoop->id] = ($startA + $a + 1) % $fbPassList->count();
                                         $campaignFallbackCursors[$campaignId] = ($cCursor + 1) % $cFallbacks->count();
                                         break;
                                     } else {
@@ -498,11 +503,14 @@ class QueueGenerationService
                 while ($fbAttempts < $fbCandidates->count() && !$selected) {
                     $fbLoop = $fbCandidates[$globalFallbackLoopIndex % $fbCandidates->count()];
                     $fbPassList = $buildPassList($fbLoop);
+                    $startA = $globalFallbackAssetCursors[$fbLoop->id] ?? 0;
 
-                    foreach ($fbPassList as $candidate) {
+                    for ($a = 0; $a < $fbPassList->count(); $a++) {
+                        $candidate = $fbPassList[($startA + $a) % $fbPassList->count()];
                         $fbVal = $this->isEligibleProjected($candidate, $history, $projHourly, $projDaily, $projLoopDaily, $projSpots, $billboard->timezone);
                         if ($fbVal === ConstraintValidationService::VALID) {
                             $selected = $candidate;
+                            $globalFallbackAssetCursors[$fbLoop->id] = ($startA + $a + 1) % $fbPassList->count();
                             $globalFallbackLoopIndex = ($globalFallbackLoopIndex + 1) % $fbCandidates->count();
                             break;
                         } else {
@@ -519,7 +527,11 @@ class QueueGenerationService
 
             // Emergency safety net
             if (!$selected) {
-                $anyWithSpots = MediaAsset::where('play_spots_remaining', '>', 0)
+                $anyWithSpots = MediaAsset::where('is_synced', true)
+                    ->where(function ($q) {
+                        $q->where('play_spots_remaining', '>', 0)
+                          ->orWhereHas('loop', fn ($l) => $l->where('is_fallback', true));
+                    })
                     ->get()
                     ->filter(function ($a) use ($billboard, $projSpots, $secondsPerSpot) {
                         if (!$this->isAssignedToBillboard($a, $billboard)) {

@@ -426,3 +426,54 @@ test("Flight dates are judged on the billboard's local day, not UTC", () => {
   // ...until LA's own day turns over.
   assert.strictEqual(la.pickNext(new Date('2026-11-01T08:00:00Z')), null);
 });
+
+test('Fallback assets with 0 play spots remaining still play and rotate round-robin', () => {
+  const fallbackLoopId = 'fallback-loop-1';
+  const assetsById = new Map([
+    ['maroon', createAssetDetail('maroon', fallbackLoopId, 0)],
+    ['navy', createAssetDetail('navy', fallbackLoopId, 1)],
+  ]);
+
+  const schedule = {
+    primary: [],
+    global_fallback: [
+      { asset_id: 'maroon', loop_id: fallbackLoopId, campaign_id: null, order_index: 0 },
+      { asset_id: 'navy', loop_id: fallbackLoopId, campaign_id: null, order_index: 1 },
+    ],
+    loops: {
+      [fallbackLoopId]: { id: fallbackLoopId, name: 'Prod-E2E-Loop', is_fallback: true, is_bundle: false },
+    },
+  };
+
+  // Both assets have 0 play spots remaining!
+  const quota = {
+    seconds_per_spot: 15,
+    assets: {
+      maroon: { play_spots_remaining: 0 },
+      navy: { play_spots_remaining: 0 },
+    },
+    loops: {
+      [fallbackLoopId]: { max_daily_spots: null, spots_spent_today: 0, is_fallback: true },
+    },
+  };
+
+  const rejections = [];
+  const scheduler = new Scheduler({
+    schedule,
+    quota,
+    assetsById,
+    onReject: (id, reason) => rejections.push({ id, reason }),
+  });
+
+  const picked = [];
+  for (let i = 0; i < 4; i++) {
+    const asset = scheduler.pickNext();
+    assert.ok(asset, `Expected fallback asset for pick ${i}`);
+    picked.push(asset.asset_id);
+    scheduler.recordPlay(asset);
+  }
+
+  // Both assets should play and rotate: maroon, navy, maroon, navy
+  assert.deepStrictEqual(picked, ['maroon', 'navy', 'maroon', 'navy']);
+  assert.strictEqual(rejections.length, 0, 'No rejections expected for fallback assets with 0 spots');
+});
