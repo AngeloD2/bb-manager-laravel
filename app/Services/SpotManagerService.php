@@ -81,7 +81,7 @@ class SpotManagerService
                         ]
                     ],
                     ['billboard_id', 'asset_id', 'reason', 'date'],
-                    ['count' => DB::raw("count + {$rej['count']}")]
+                    ['count' => DB::raw("queue_rejection_stats.count + {$rej['count']}")]
                 );
             }
         }

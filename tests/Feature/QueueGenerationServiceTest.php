@@ -334,4 +334,23 @@ class QueueGenerationServiceTest extends TestCase
         // Round-robin among campaign's fallback loops: fb1, fb2, fb1
         $this->assertSame(['gamma_fb1', 'gamma_fb2', 'gamma_fb1'], $names);
     }
+
+    /** @test */
+    public function it_tallies_rejections_in_queue_rejection_stats_when_asset_fails_constraints(): void
+    {
+        $loop = MediaLoop::create(['name' => 'Exhausted Loop', 'is_fallback' => false, 'is_global' => true]);
+        $asset = $this->asset('no_spots_clip', $loop, 0, ['play_spots_remaining' => 0]);
+
+        $billboard = Billboard::create(['name' => 'Board Rejection Test']);
+
+        // Running getUpcomingQueue will reject the asset and tally it in queue_rejection_stats
+        app(QueueGenerationService::class)->getUpcomingQueue($billboard, 3);
+
+        $this->assertDatabaseHas('queue_rejection_stats', [
+            'billboard_id' => $billboard->id,
+            'asset_id'     => $asset->id,
+            'reason'       => \App\Services\ConstraintValidationService::NO_SPOTS_REMAINING,
+            'date'         => now()->format('Y-m-d'),
+        ]);
+    }
 }

@@ -635,7 +635,7 @@ class QueueGenerationService
                     ['billboard_id' => $billboardId, 'asset_id' => $assetId, 'reason' => $reason, 'date' => $date, 'count' => 1]
                 ],
                 ['billboard_id', 'asset_id', 'reason', 'date'],
-                ['count' => \Illuminate\Support\Facades\DB::raw('count + 1')]
+                ['count' => \Illuminate\Support\Facades\DB::raw('queue_rejection_stats.count + 1')]
             );
     }
 }
