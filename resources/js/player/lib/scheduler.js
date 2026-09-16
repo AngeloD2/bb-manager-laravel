@@ -83,13 +83,11 @@ export class Scheduler {
     this.primaryLoops = this._groupLoops(this.schedule.primary || [], false);
 
     // Group fallback schedule into loops and partition into campaign-specific vs global
-    const fallbackSlots =
-      Array.isArray(this.schedule.fallback) && this.schedule.fallback.length > 0
-        ? this.schedule.fallback
-        : [
-            ...(Array.isArray(this.schedule.campaign_fallback) ? this.schedule.campaign_fallback : []),
-            ...(Array.isArray(this.schedule.global_fallback) ? this.schedule.global_fallback : []),
-          ];
+    const fallbackSlots = [
+      ...(Array.isArray(this.schedule.fallback) ? this.schedule.fallback : []),
+      ...(Array.isArray(this.schedule.campaign_fallback) ? this.schedule.campaign_fallback : []),
+      ...(Array.isArray(this.schedule.global_fallback) ? this.schedule.global_fallback : []),
+    ];
 
     this.allFallbackLoops = this._groupLoops(fallbackSlots, true);
     this.campaignFallbackLoops = new Map();
@@ -327,7 +325,7 @@ export class Scheduler {
 
     // A play costs the asset's footprint in spots (fallback assets are unlimited filler).
     if (!isFallback && w.spotsRemaining < this.footprint(assetId)) return 'no_spots_remaining';
-    if (!this._withinCampaign(detail, q, now)) return 'outside_flight_dates';
+    if (!isFallback && !this._withinCampaign(detail, q, now)) return 'outside_flight_dates';
     if (!this._withinPlaybackWindow(detail, q, now)) return 'outside_playback_window';
 
     if (q.max_plays_per_hour != null &&
