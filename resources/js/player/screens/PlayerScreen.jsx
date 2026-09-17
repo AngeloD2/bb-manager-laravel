@@ -312,12 +312,20 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
 
   const { src, resolvedKey, notCached, downloading } = useEdgeCache(stableKey, fetchUrl, billboard.offline_mode, token);
 
-  const isImage = currentAsset && IMAGE_TYPES.has(currentAsset.file_type);
-
   // Tag the loaded flag with the src it was recorded against, so a new src
   // reads as not-yet-loaded by derivation instead of via a reset effect.
   const [loadedSrc, setLoadedSrc] = useState(null);
   const imageLoaded = src !== null && loadedSrc === src;
+
+  // Track the asset that matches the currently resolved src to prevent rendering
+  // a video blob in an <img> tag (or vice versa) while the next asset loads.
+  const lastAssetRef = useRef(null);
+  if (currentAsset && stableKey === resolvedKey) {
+    lastAssetRef.current = currentAsset;
+  }
+  const displayedAsset = stableKey === resolvedKey ? currentAsset : lastAssetRef.current;
+  const isImage = displayedAsset && IMAGE_TYPES.has(displayedAsset.file_type);
+
 
   // We only want to increment the video element's key (which forces a remount/restart)
   // when the actual blob src is ready for the CURRENT play sequence. Otherwise,
