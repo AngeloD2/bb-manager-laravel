@@ -34,3 +34,7 @@ yarn-error.log
 # merge/patch debris
 *.orig
 *.rej
+
+**/caddy
+frankenphp
+frankenphp-worker.php
