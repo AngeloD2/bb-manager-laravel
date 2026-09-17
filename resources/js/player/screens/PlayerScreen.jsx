@@ -62,7 +62,7 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
   }
 
   const startMutation = useMutation({
-    mutationFn: (assetId) => reportStart(apiUrl, token, assetId),
+    mutationFn: ({ assetId, durationSecs }) => reportStart(apiUrl, token, assetId, durationSecs),
   });
 
   // Combined media manifest (primary + fallback), indexed for the scheduler and
@@ -390,7 +390,13 @@ export default function PlayerScreen({ apiUrl, token, syncData, onAuthLost }) {
     recordedRef.current = currentAsset;
     recordPlay(currentAsset);          // meter the spot locally + queue the log
     onVideoPlay(currentAsset.asset_id);
-    startMutation.mutate(currentAsset.asset_id);
+    // A video advances on its own 'ended', so its element's duration — not the
+    // stored duration_secs — is how long this play really runs.
+    const el = videoRef.current;
+    const natural = !IMAGE_TYPES.has(currentAsset.file_type) && el && Number.isFinite(el.duration) && el.duration > 0
+      ? el.duration
+      : null;
+    startMutation.mutate({ assetId: currentAsset.asset_id, durationSecs: natural ?? currentAsset.duration_secs });
   }
 
   // Every advance funnels through here so the pending timer is always dropped

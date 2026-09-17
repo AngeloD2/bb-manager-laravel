@@ -20,6 +20,9 @@ use Illuminate\Support\Facades\Validator;
  */
 class SyncController extends Controller
 {
+    /** How far ahead the paged timeline projects, in plays. */
+    private const TIMELINE_LOOKAHEAD = 200;
+
     public function __construct(
         private readonly BillboardSyncService   $syncService,
         private readonly SpotManagerService $tokenManager
@@ -96,7 +99,8 @@ class SyncController extends Controller
     public function storeLogs(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'logs'                      => ['required', 'array', 'min:1', 'max:500'],
+            // May be empty: a flush can carry only rejection stats.
+            'logs'                      => ['present', 'array', 'max:500'],
             'logs.*.asset_id'           => ['required', 'uuid', 'exists:media_assets,id'],
             'logs.*.client_event_id'    => ['required', 'uuid'],
             'logs.*.played_at'          => ['required', 'date'],
@@ -133,8 +137,10 @@ class SyncController extends Controller
     public function reportPlaybackStart(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'asset_id'   => ['required', 'uuid', 'exists:media_assets,id'],
-            'started_at' => ['required', 'date'],
+            'asset_id'      => ['required', 'uuid', 'exists:media_assets,id'],
+            'started_at'    => ['required', 'date'],
+            // The length this play really runs (a video's own duration), when known.
+            'duration_secs' => ['sometimes', 'nullable', 'numeric', 'min:0.1', 'max:86400'],
         ]);
 
         if ($validator->fails()) {
@@ -145,9 +151,19 @@ class SyncController extends Controller
         $billboard = $request->user();
         $asset  = \App\Models\MediaAsset::findOrFail($request->input('asset_id'));
 
+        // Stamp the start on the server clock as the report arrives. The board
+        // reports the moment playback begins, and the dashboard can place server
+        // time on its own clock — the board's clock may be skewed, and the time
+        // the broadcast reaches the dashboard varies with network latency.
+        $startedAtMs = (int) round((defined('LARAVEL_START') ? LARAVEL_START : microtime(true)) * 1000);
+        $durationSecs = $request->filled('duration_secs') ? (float) $request->input('duration_secs') : null;
+
+        // Re-anchor the dashboard's upcoming queue on what the board actually started.
+        app(\App\Services\QueueGenerationService::class)->alignToStarted($billboard, $asset->id);
+
         // Broadcast via Reverb/Pusher if configured
         try {
-            broadcast(new \App\Events\PlaybackStarted($billboard, $asset, $request->input('started_at')));
+            broadcast(new \App\Events\PlaybackStarted($billboard, $asset, $request->input('started_at'), $durationSecs, $startedAtMs));
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::error('Broadcast failed: ' . $e->getMessage());
         }
@@ -283,10 +299,31 @@ class SyncController extends Controller
     {
         $billboardId = $request->query('billboard_id');
         $billboard = \App\Models\Billboard::findOrFail($billboardId);
-        
-        $queue = $queueService->getUpcomingQueue($billboard, 12);
-        
-        return response()->json(['data' => $queue]);
+
+        // Without paging params: the live queue, as the store's playback prediction expects.
+        if (!$request->has('offset') && !$request->has('limit')) {
+            return response()->json(['data' => $queueService->getUpcomingQueue($billboard, 12)]);
+        }
+
+        // Paged look-ahead for "Up Next": the live queue, then a read-only projection.
+        $data = $request->validate([
+            'offset' => ['sometimes', 'integer', 'min:0', 'max:' . (self::TIMELINE_LOOKAHEAD - 1)],
+            'limit'  => ['sometimes', 'integer', 'min:1', 'max:50'],
+        ]);
+        $offset = (int) ($data['offset'] ?? 0);
+        $limit = min((int) ($data['limit'] ?? 10), self::TIMELINE_LOOKAHEAD - $offset);
+
+        $upcoming = $queueService->previewQueue($billboard, $offset + $limit);
+        $page = array_slice($upcoming, $offset, $limit);
+
+        return response()->json([
+            'data' => $page,
+            'meta' => [
+                'offset'   => $offset,
+                'limit'    => $limit,
+                'has_more' => count($page) === $limit && $offset + $limit < self::TIMELINE_LOOKAHEAD,
+            ],
+        ]);
     }
 }
 

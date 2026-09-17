@@ -26,7 +26,11 @@ class PlaybackStarted implements ShouldBroadcastNow
     public function __construct(
         public readonly Billboard  $billboard,
         public readonly MediaAsset $asset,
-        public readonly string     $startedAt
+        public readonly string     $startedAt,
+        /** How long this play really runs, as reported by the board; null → the asset's stored duration. */
+        public readonly ?float     $durationSecs = null,
+        /** Server-clock epoch ms at which the start report arrived. */
+        public readonly ?int       $startedAtMs = null
     ) {}
 
     public function broadcastOn(): array
@@ -46,8 +50,9 @@ class PlaybackStarted implements ShouldBroadcastNow
             'asset_id'      => $this->asset->id,
             'asset_name'    => $this->asset->name,
             'file_type'     => $this->asset->file_type,
-            'duration_secs' => $this->asset->duration_secs,
+            'duration_secs' => $this->durationSecs ?? $this->asset->duration_secs,
             'started_at'    => $this->startedAt,
+            'started_at_ms' => $this->startedAtMs,
         ];
     }
 }

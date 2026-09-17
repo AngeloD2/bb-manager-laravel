@@ -531,4 +531,85 @@ class BillboardSyncTest extends TestCase
             }
         );
     }
+
+    /** @test */
+    public function playback_start_broadcasts_the_real_duration_and_a_server_clock_start(): void
+    {
+        Event::fake();
+
+        $this->actAsBillboard();
+        $asset = $this->makeSyncedAsset();
+
+        $this->postJson('/api/v1/playback/start', [
+            'asset_id'      => $asset->id,
+            'started_at'    => now()->toIso8601String(),
+            'duration_secs' => 4.2,
+        ])->assertOk();
+
+        Event::assertDispatched(PlaybackStarted::class, function (PlaybackStarted $event) {
+            $payload = $event->broadcastWith();
+
+            return $payload['duration_secs'] === 4.2
+                && is_int($payload['started_at_ms'])
+                && abs($payload['started_at_ms'] - now()->getTimestampMs()) < 5000;
+        });
+    }
+
+    /** @test */
+    public function playback_start_advances_the_queue_past_the_started_asset(): void
+    {
+        Event::fake();
+
+        $this->actAsBillboard();
+        $started = $this->makeSyncedAsset();
+        $key = "billboard:{$this->billboard->id}:queue";
+        \Illuminate\Support\Facades\Cache::put($key, [
+            ['id' => 'q1', 'asset_id' => (string) \Illuminate\Support\Str::uuid(), 'is_override' => false],
+            ['id' => 'q2', 'asset_id' => $started->id, 'is_override' => false],
+            ['id' => 'q3', 'asset_id' => (string) \Illuminate\Support\Str::uuid(), 'is_override' => false],
+        ]);
+
+        $this->postJson('/api/v1/playback/start', [
+            'asset_id' => $started->id, 'started_at' => now()->toIso8601String(),
+        ])->assertOk();
+
+        $this->assertSame(['q3'], array_column(\Illuminate\Support\Facades\Cache::get($key), 'id'));
+    }
+
+    /** @test */
+    public function playback_start_of_an_unqueued_asset_resets_the_queue(): void
+    {
+        Event::fake();
+
+        $this->actAsBillboard();
+        $unexpected = $this->makeSyncedAsset();
+        $key = "billboard:{$this->billboard->id}:queue";
+        \Illuminate\Support\Facades\Cache::put($key, [
+            ['id' => 'q1', 'asset_id' => (string) \Illuminate\Support\Str::uuid(), 'is_override' => false],
+        ]);
+
+        $this->postJson('/api/v1/playback/start', [
+            'asset_id' => $unexpected->id, 'started_at' => now()->toIso8601String(),
+        ])->assertOk();
+
+        // The stale prediction is dropped and regeneration resumes from what really played.
+        $this->assertFalse(\Illuminate\Support\Facades\Cache::has($key));
+        $this->assertSame($unexpected->id, \Illuminate\Support\Facades\Cache::get("billboard:{$this->billboard->id}:last_started"));
+    }
+
+    /** @test */
+    public function a_flush_carrying_only_rejection_stats_is_accepted(): void
+    {
+        $this->actAsBillboard();
+        $asset = $this->makeSyncedAsset();
+
+        $this->postJson('/api/v1/logs', [
+            'logs'       => [],
+            'rejections' => [['asset_id' => $asset->id, 'reason' => 'hourly_exceeded', 'count' => 2]],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('queue_rejection_stats', [
+            'billboard_id' => $this->billboard->id, 'asset_id' => $asset->id, 'count' => 2,
+        ]);
+    }
 }

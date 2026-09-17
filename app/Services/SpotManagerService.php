@@ -163,9 +163,10 @@ class SpotManagerService
                 throw new DuplicateEventException();
             }
 
-            // Remove the played asset from the server's generated timeline queue
-            app(\App\Services\QueueGenerationService::class)
-                ->consumePlayedAsset($billboard, $asset->id, $entry['was_override'] ?? false);
+            // The generated timeline queue advances on the board's live start
+            // report (QueueGenerationService::alignToStarted), not here: logs can
+            // arrive long after the fact in an offline batch, and consuming again
+            // would skip ahead past later plays of the same asset.
 
             return 'new';
         });

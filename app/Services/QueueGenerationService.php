@@ -97,6 +97,12 @@ class QueueGenerationService
                     ->reverse()
                     ->values()
                     ->all();
+                // Rejected plays are never logged, so also resume after whatever
+                // the board last reported starting.
+                $lastStarted = Cache::get("billboard:{$billboard->id}:last_started");
+                if ($lastStarted && end($history) !== $lastStarted) {
+                    $history[] = $lastStarted;
+                }
             }
 
             $newItems = $this->generateNextSequence(
@@ -108,6 +114,57 @@ class QueueGenerationService
         }
 
         return $queue;
+    }
+
+    /**
+     * Read-only look further ahead than the live queue: the live queue (topped up
+     * to its usual size) followed by a projection of what would be generated after
+     * it. Only the live queue is saved, so the billboard's cursor is untouched.
+     */
+    public function previewQueue(Billboard $billboard, int $count, int $liveSize = 12): array
+    {
+        $queue = $this->getUpcomingQueue($billboard, $liveSize);
+        if ($count <= count($queue)) {
+            return array_slice($queue, 0, $count);
+        }
+
+        $secondsPerSpot = (int) (Setting::where('key', 'seconds_per_spot')->value('value') ?? 15);
+        $assets = MediaAsset::whereIn('id', collect($queue)->pluck('asset_id')->unique()->all())
+            ->get()
+            ->keyBy('id');
+
+        // Carry the live queue's consumption into the projection, as if it had
+        // already played: caps, rotation cursor, and pacing continue from its end.
+        $history = [];
+        $projHourly = [];
+        $projDaily = [];
+        $projLoopDaily = [];
+        $projSpots = [];
+        $playMs = [];
+        $clockMs = now()->getTimestampMs();
+        foreach ($queue as $item) {
+            $history[] = $item['asset_id'];
+            $asset = $assets->get($item['asset_id']);
+            if ($asset && !($item['is_override'] ?? false)) {
+                $footprint = $asset->spotFootprint($secondsPerSpot);
+                $projHourly[$asset->id] = ($projHourly[$asset->id] ?? 0) + 1;
+                $projDaily[$asset->id] = ($projDaily[$asset->id] ?? 0) + 1;
+                $projSpots[$asset->id] = ($projSpots[$asset->id] ?? 0) + $footprint;
+                if ($asset->loop_id) {
+                    $projLoopDaily[$asset->loop_id] = ($projLoopDaily[$asset->loop_id] ?? 0) + $footprint;
+                }
+                $playMs[$asset->id] = $clockMs;
+            }
+            $clockMs += (int) round(($item['duration_secs'] ?? 0) * 1000);
+        }
+
+        $projected = $this->generateNextSequence(
+            $billboard, $count - count($queue), $history,
+            $projHourly, $projDaily, $projLoopDaily, $projSpots, $secondsPerSpot,
+            $playMs, $clockMs
+        );
+
+        return array_merge($queue, $projected);
     }
 
     public function injectOverride(Billboard $billboard, MediaAsset $asset): void
@@ -170,46 +227,32 @@ class QueueGenerationService
     }
 
     /**
-     * Called when the billboard reports an asset as played.
-     * Removes the asset from the front of the cached timeline queue so it doesn't pile up.
+     * Re-anchor the live queue on the asset a billboard just started. Items up to
+     * and including it have played. If it isn't queued at all — the board played
+     * something the queue didn't predict — the queue is dropped so it regenerates
+     * from that asset onward; otherwise it would never advance.
      */
-    public function consumePlayedAsset(Billboard $billboard, string $assetId, bool $wasOverride = false): void
+    public function alignToStarted(Billboard $billboard, string $assetId): void
     {
-        $cacheKey = "billboard:{$billboard->id}:queue";
-        $queue = Cache::get($cacheKey, []);
+        Cache::put("billboard:{$billboard->id}:last_started", $assetId, now()->addDay());
 
-        if (empty($queue)) {
+        $queue = Cache::get("billboard:{$billboard->id}:queue", []);
+        foreach ($queue as $index => $item) {
+            if ($item['asset_id'] !== $assetId) {
+                continue;
+            }
+            if ($item['is_override'] ?? false) {
+                // Overrides preempt the queue without advancing the primary cursor.
+                array_splice($queue, $index, 1);
+            } else {
+                // A normal play means anything queued before it was skipped.
+                array_splice($queue, 0, $index + 1);
+            }
+            $this->saveQueue($billboard, $queue);
             return;
         }
 
-        // Look for the first matching item in the queue (usually at the very top).
-        foreach ($queue as $index => $item) {
-            if ($item['asset_id'] === $assetId && ($item['is_override'] ?? false) === $wasOverride) {
-                if ($wasOverride) {
-                    // Overrides preempt the queue without advancing the primary cursor.
-                    array_splice($queue, $index, 1);
-                } else {
-                    // Normal plays mean the player skipped any items before this one.
-                    array_splice($queue, 0, $index + 1);
-                }
-                $this->saveQueue($billboard, $queue);
-                return;
-            }
-        }
-        
-        // Fallback: If we didn't find an exact match including wasOverride, 
-        // just match the asset_id (in case of override flag mismatch).
-        foreach ($queue as $index => $item) {
-            if ($item['asset_id'] === $assetId) {
-                if ($item['is_override'] ?? false) {
-                    array_splice($queue, $index, 1);
-                } else {
-                    array_splice($queue, 0, $index + 1);
-                }
-                $this->saveQueue($billboard, $queue);
-                return;
-            }
-        }
+        Cache::forget("billboard:{$billboard->id}:queue");
     }
 
     private function generateNextSequence(
@@ -220,7 +263,9 @@ class QueueGenerationService
         array $projDaily = [],
         array $projLoopDaily = [],
         array $projSpots = [],
-        int $secondsPerSpot = 15
+        int $secondsPerSpot = 15,
+        array $queuedPlayMs = [],
+        ?int $startMs = null
     ): array {
         $loopOrder = collect($billboard->loop_orders ?? [])->flip(); // loop_id => position
         $byLoopOrder = fn (Collection $loops) => $loops->sort(function ($a, $b) use ($loopOrder) {
@@ -276,7 +321,11 @@ class QueueGenerationService
             ->pluck('last_played', 'asset_id')
             ->map(fn ($t) => \Carbon\Carbon::parse($t)->getTimestampMs())
             ->all();
-        $virtualMs = now()->getTimestampMs();
+        // Plays already queued ahead of this batch (when projecting past the live queue).
+        foreach ($queuedPlayMs as $assetId => $ms) {
+            $lastPlayedMs[$assetId] = max($lastPlayedMs[$assetId] ?? 0, $ms);
+        }
+        $virtualMs = $startMs ?? now()->getTimestampMs();
 
         $buildPassList = function (MediaLoop $loop) use ($billboard, &$lastPlayedMs) {
             $assets = $loop->assets->filter(fn ($a) => $this->isAssignedToBillboard($a, $billboard));

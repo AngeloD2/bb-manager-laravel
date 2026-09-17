@@ -40,7 +40,9 @@ export async function ping(apiUrl, token) {
   return res.json();
 }
 
-export async function reportStart(apiUrl, token, assetId) {
+// `durationSecs` is how long this play really runs (a video's own length), so
+// the dashboard's scrubber ends when the board actually moves on.
+export async function reportStart(apiUrl, token, assetId, durationSecs) {
   const now = new Date().toISOString().replace('+00:00', 'Z');
   await fetch(`${apiUrl}/playback/start`, {
     method: 'POST',
@@ -48,7 +50,7 @@ export async function reportStart(apiUrl, token, assetId) {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ asset_id: assetId, started_at: now }),
+    body: JSON.stringify({ asset_id: assetId, started_at: now, duration_secs: durationSecs ?? null }),
   }).catch(() => {});
 }
 

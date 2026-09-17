@@ -25,6 +25,9 @@ export function useSyncEngine({
   refreshMs = 120000,
 }) {
   const flushingRef = useRef(false);
+  const refreshRef = useRef(null);
+  const pausedRef = useRef(paused);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
 
   const flush = useCallback(async () => {
     if (!apiUrl || !token || flushingRef.current) return;
@@ -48,6 +51,12 @@ export function useSyncEngine({
       await queuePurgeSynced();
       if (rejections.length > 0) {
         await clearRejections();
+      }
+      // A rejected play means the server no longer considers that asset playable
+      // (spots exhausted, outside its flight...), so the local snapshot is stale.
+      // Reconcile now rather than keep airing it until the next interval.
+      if (results.some((r) => r.status === 'rejected') && !pausedRef.current) {
+        refreshRef.current?.();
       }
     } catch (err) {
       // Offline is the normal case here and must not disturb playback: the
@@ -79,9 +88,21 @@ export function useSyncEngine({
     }
   }, [apiUrl, token, onReconcile, flush, onAuthLost]);
 
-  // Flush as soon as the link comes back (and on first mount if already online).
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+
+  // As soon as the link comes back (and on first mount if already online), flush
+  // local plays and then pull a fresh snapshot. A cold boot starts from the
+  // snapshot saved on the last run, whose spot counts no longer include plays the
+  // server has since charged; playing from it until the first interval would air
+  // assets the server already considers exhausted. A paused board only flushes
+  // (see the interval below for why it must not reconcile).
   useEffect(() => {
-    if (isOnline) flush();
+    if (!isOnline) return;
+    if (pausedRef.current) {
+      flush();
+      return;
+    }
+    flush().then(() => refreshRef.current?.());
   }, [isOnline, flush]);
 
   // Periodic reconcile while reachable. Suspended while paused: a frozen billboard
